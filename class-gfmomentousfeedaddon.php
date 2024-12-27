@@ -178,8 +178,6 @@ class GFMomentousFeedAddOn extends GFFeedAddOn {
         //Silence is golden
     }
 
-
-
     public function get_mapped_fields($formId) {
         global $wpdb;
         $form_filter = is_numeric( $formId ) ? $wpdb->prepare( 'AND form_id=%d', absint( $formId ) ) : '';
@@ -203,6 +201,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn {
             }
             $mapping[$entity][]= $entry;
         }
+        $this->log_debug('Mapped field are ' . var_export($mapping, true));
         return $mapping;
     }
 
@@ -213,6 +212,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn {
                 $result[$entity][$field['entity_field']] = !empty(rgar($inputs, $field['form_field'])) ? rgar($inputs, $field['form_field']) : $field['default_value'];
             }
         }
+        $this->log_debug('Processed fields are ' . var_export($result,true));
         return $result;
     }
 
@@ -221,7 +221,14 @@ class GFMomentousFeedAddOn extends GFFeedAddOn {
         $settings = $this->get_saved_plugin_settings();
         $api = new GF_Momentous_API($settings);
         foreach ($requests as $endpoint => $body) {
-            $api->request(ucfirst($endpoint), $body, 'POST');
+            $response = $api->request(ucfirst($endpoint), $body, 'POST');
+
+            if (is_wp_error($response)) {
+                $this->log_debug('RESPONSE: '  . $response->get_error_message());
+            } else {
+                $body = wp_remote_retrieve_body($response);
+                $this->log_debug('RESPONSE ' . $body);
+            }
         }
     }
 

@@ -48,14 +48,7 @@ class GF_Momentous_API
             'body' => json_encode($parameters),
             'timeout' => 60
         ]);
-        if (is_wp_error($response)) {
-            $logMessage = 'API Request Error: ' . $response->get_error_message();
-            error_log($logMessage);
-        } else {
-            $body = wp_remote_retrieve_body($response);
-            $logMessage = 'API Response: ' . $body;
-            error_log($logMessage);
-        }
+        return $response;
     }
 
     private function getToken()

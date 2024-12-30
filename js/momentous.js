@@ -41,6 +41,10 @@
     $(document).ready(function() {
         var entityField = '.momentous-entity-selector';
         var fieldSection = '.field-mapping-section'
+        if ($(entityField).val() !=="") {
+            $(fieldSection).show();
+            app.generateMomentousFields($(entityField).val());
+        }
         $(entityField).on('change', function(evt) {
             console.log(this.value);
             if (this.value !== "") {

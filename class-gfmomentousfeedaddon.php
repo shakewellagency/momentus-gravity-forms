@@ -5,7 +5,8 @@
  * @copyright Copyright (c) Shakewell (https://www.shakewell.agency/)
  */
 GFForms::include_feed_addon_framework();
-class GFMomentousFeedAddOn extends GFFeedAddOn {
+class GFMomentousFeedAddOn extends GFFeedAddOn
+{
 
     const MOMENTOUS_CLIENT_ID_LABEL = 'Client Id';
     const MOMENTOUS_CLIENT_ID_NAME = 'client_id';
@@ -22,17 +23,18 @@ class GFMomentousFeedAddOn extends GFFeedAddOn {
     protected $_slug                     = 'momentous';
     protected $_path                     = 'gravityforms-momentous/momentousaddon.php';
     protected $_full_path                = __FILE__;
-    protected $_title                    = 'Gravity Forms Momentous Feed Add-On';
-    protected $_short_title              = 'Momentous Feed Add-On';
+    protected $_title                    = 'Gravity Forms Momentous Add-On';
+    protected $_short_title              = 'Momentous Add-On';
 
     private static $_instance = null;
 
-    public function init() {
+    public function init()
+    {
         parent::init();
 
         $this->add_delayed_payment_support(
             array(
-                'option_label' => esc_html__( 'Subscribe contact to service x only when payment is received.', 'momentous' ),
+                'option_label' => esc_html__('Subscribe contact to service x only when payment is received.', 'momentous'),
             )
         );
     }
@@ -101,7 +103,8 @@ class GFMomentousFeedAddOn extends GFFeedAddOn {
         );
     }
 
-    public function feed_settings_fields() {
+    public function feed_settings_fields()
+    {
 
         $formId = rgget('id');
         $form = GFAPI::get_form($formId);
@@ -174,21 +177,24 @@ class GFMomentousFeedAddOn extends GFFeedAddOn {
         ];
     }
 
-    public function process_feed($feed, $entry, $form) {
+    public function process_feed($feed, $entry, $form)
+    {
         //Silence is golden
     }
 
-    public function get_mapped_fields($formId) {
+    public function get_mapped_fields($formId)
+    {
         global $wpdb;
-        $form_filter = is_numeric( $formId ) ? $wpdb->prepare( 'AND form_id=%d', absint( $formId ) ) : '';
+        $form_filter = is_numeric($formId) ? $wpdb->prepare('AND form_id=%d', absint($formId)) : '';
 
         $sql = $wpdb->prepare(
             "SELECT * FROM {$wpdb->prefix}gf_addon_feed
-                               WHERE addon_slug=%s {$form_filter} ORDER BY `feed_order`, `id` ASC",  $this->get_slug()
+                               WHERE addon_slug=%s {$form_filter} ORDER BY `feed_order`, `id` ASC",
+            $this->get_slug()
         );
-        $results = $wpdb->get_results( $sql, ARRAY_A );
+        $results = $wpdb->get_results($sql, ARRAY_A);
         $mapping = [];
-        foreach($results as $result) {
+        foreach ($results as $result) {
             $meta = json_decode($result['meta'], true);
             $entity = $meta['entity'];
             $entry = [
@@ -205,18 +211,20 @@ class GFMomentousFeedAddOn extends GFFeedAddOn {
         return $mapping;
     }
 
-    public function process_mapped_fields($mapping, $inputs) {
+    public function process_mapped_fields($mapping, $inputs)
+    {
         $result = [];
         foreach ($mapping as $entity => $fields) {
-            foreach($fields as $field) {
+            foreach ($fields as $field) {
                 $result[$entity][$field['entity_field']] = !empty(rgar($inputs, $field['form_field'])) ? rgar($inputs, $field['form_field']) : $field['default_value'];
             }
         }
-        $this->log_debug('Processed fields are ' . var_export($result,true));
+        $this->log_debug('Processed fields are ' . var_export($result, true));
         return $result;
     }
 
-    public function send($requests) {
+    public function send($requests)
+    {
         require_once 'includes/class-gf-momentous-api.php';
         $settings = $this->get_saved_plugin_settings();
         $api = new GF_Momentous_API($settings);
@@ -232,39 +240,61 @@ class GFMomentousFeedAddOn extends GFFeedAddOn {
         }
     }
 
-    private function get_saved_plugin_settings() {
-        $prefix  = $this->is_gravityforms_supported( '2.5' ) ? '_gform_setting' : '_gaddon_setting';
-        $api_url = rgpost( "{$prefix}_api_url" );
-        $api_key = rgpost( "{$prefix}_api_key" );
+    private function get_saved_plugin_settings()
+    {
+        $prefix  = $this->is_gravityforms_supported('2.5') ? '_gform_setting' : '_gaddon_setting';
+        $api_url = rgpost("{$prefix}_api_url");
+        $api_key = rgpost("{$prefix}_api_key");
 
         $settings = $this->get_plugin_settings();
-        if ( ! is_array( $settings ) ) {
+        if (! is_array($settings)) {
             $settings = array();
         }
 
-        if ( ! $this->is_plugin_settings( $this->_slug ) || ! ( $api_url && $api_key ) ) {
+        if (! $this->is_plugin_settings($this->_slug) || ! ( $api_url && $api_key )) {
             return $settings;
         }
 
-        $settings['api_url'] = esc_url( $api_url );
-        $settings['api_key'] = sanitize_title( $api_key );
+        $settings['api_url'] = esc_url($api_url);
+        $settings['api_key'] = sanitize_title($api_key);
 
         return $settings;
     }
 
-    public function feed_list_columns() {
+    public function feed_list_columns()
+    {
         return array(
-            'entity'  => esc_html__( 'Entity', 'momentous' ),
-            'entity_field' => esc_html__( 'Parameter', 'momentous' ),
-            'form_field' => esc_html__( 'Form field', 'momentous' ),
-            'default_value' => esc_html__( 'Default value', 'momentous' ),
+            'entity'  => esc_html__('Entity', 'momentous'),
+            'entity_field' => esc_html__('Parameter', 'momentous'),
+            'form_field' => esc_html__('Form field', 'momentous'),
+            'default_value' => esc_html__('Default value', 'momentous'),
         );
+    }
+
+    public function get_column_value_form_field($item)
+    {
+        if (isset($item['form_id']) && isset($item['meta'])) {
+            if (isset($item['meta']['form_field'])) {
+                $field = GFAPI::get_field($item['form_id'], $item['meta']['form_field']);
+                return $field['label'];
+            }
+        }
+    }
+
+    public function get_column_value_entity($item)
+    {
+        if (isset($item['form_id']) && isset($item['meta'])) {
+            if (isset($item['meta']['entity'])) {
+                return ucfirst($item['meta']['entity']);
+            }
+        }
     }
 
 
 
-    public static function get_instance() {
-        if ( self::$_instance == null ) {
+    public static function get_instance()
+    {
+        if (self::$_instance == null) {
             self::$_instance = new GFMomentousFeedAddOn();
         }
 

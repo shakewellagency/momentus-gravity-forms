@@ -23,6 +23,14 @@
                 { label: 'User Text 08', value: 'UserText08'},
                 { label: 'User Text 09', value: 'UserText09'},
                 { label: 'User Text 10', value: 'UserText10'},
+                { label: 'User Number 01', value: 'UserNumber01'},
+                { label: 'User Number 02', value: 'UserNumber02'},
+                { label: 'User Number 03', value: 'UserNumber03'},
+                { label: 'User Number 04', value: 'UserNumber04'},
+                { label: 'User Number 05', value: 'UserNumber05'},
+                { label: 'User Number 06', value: 'UserNumber06'},
+                { label: 'User Number 07', value: 'UserNumber07'},
+                { label: 'User Number 08', value: 'UserNumber08'},
             ]
         },
         init: function(config) {

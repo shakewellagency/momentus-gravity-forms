@@ -228,16 +228,39 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         require_once 'includes/class-gf-momentous-api.php';
         $settings = $this->get_saved_plugin_settings();
         $api = new GF_Momentous_API($settings);
-        foreach ($requests as $endpoint => $body) {
-            $response = $api->request(ucfirst($endpoint), $body, 'POST');
-
-            if (is_wp_error($response)) {
-                $this->log_debug('RESPONSE: '  . $response->get_error_message());
-            } else {
-                $body = wp_remote_retrieve_body($response);
-                $this->log_debug('RESPONSE ' . $body);
+        if (isset($requests['accounts'])) {
+            $response = $api->request('Accounts', $requests['accounts'], 'POST');
+            if (isset($response['response']) && isset($response['response']['code'])) {
+                if ($response['response']['code'] == 200) {
+                    $resp = json_decode($response['body'], true);
+                    $this->log_debug('ACCOUNTS API ENDPOINT SUCCESS ' . $response['body']);
+                    if (isset($resp['AccountCode'])) {
+                        $opportunityBody = $requests['opportunities'];
+                        $opportunityBody['AccountCode'] = $resp['AccountCode'];
+                        $oppResponse =  $api->request('Opportunities', $opportunityBody, 'POST');
+                        if (isset($oppResponse['response']) && isset($oppResponse['response']['code'])) {
+                            if ($oppResponse['response']['code'] == 200) {
+                                $this->log_debug("OPPORTUNITIES API ENDPOINT SUCCESS" . $oppResponse['body']);
+                            } else {
+                                $this->log_debug('OPPORTUNITIES API ENDPOINT ERROR CODE:  ' .  $oppResponse['response']['code'] . ' ' . $oppResponse['response']['message']);
+                            }
+                        }
+                    }
+                } else {
+                    $this->log_debug('ACCOUNTS API ENDPOINT ERROR CODE:  ' .  $response['response']['code'] . ' ' . $response['response']['message']);
+                }
             }
         }
+//        foreach ($requests as $endpoint => $body) {
+//            $response = $api->request(ucfirst($endpoint), $body, 'POST');
+//
+//            if (is_wp_error($response)) {
+//                $this->log_debug('RESPONSE: '  . $response->get_error_message());
+//            } else {
+//                $body = wp_remote_retrieve_body($response);
+//                $this->log_debug('RESPONSE ' . $body);
+//            }
+//        }
     }
 
     private function get_saved_plugin_settings()

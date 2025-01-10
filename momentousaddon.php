@@ -8,7 +8,7 @@ Author: Shakewell
 Author URI: https://www.shakewell.agency/
 */
 
-define( 'GF_MOMENTOUS_FEED_ADDON_VERSION', '1.0' );
+define( 'GF_MOMENTOUS_FEED_ADDON_VERSION', '1.1' );
 
 add_action( 'gform_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'load' ), 5 );
 

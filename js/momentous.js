@@ -14,6 +14,8 @@
             ],
             opportunities: [
                 { label: 'Type', value: 'Type'},
+                { label: 'Organization', value: 'Organization'},
+                { label: 'Class', value: 'Class'},
                 { label: 'User Text 01', value: 'UserText01'},
                 { label: 'User Text 02', value: 'UserText02'},
                 { label: 'User Text 03', value: 'UserText03'},

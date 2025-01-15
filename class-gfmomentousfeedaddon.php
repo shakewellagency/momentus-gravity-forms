@@ -16,6 +16,9 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
     const MOMENTOUS_CLIENT_KEY_NAME = 'client_key';
     const MOMENTOUS_CLIENT_SECRET_LABEL = 'Client Secret';
     const MOMENTOUS_CLIENT_SECRET_NAME = 'client_secret';
+    const MOMENTOUS_ASYNC_SENDING_NAME = 'async';
+    const MOMENTOUS_ASYNC_SENDING_LABEL = 'Enable Asynchronous sending';
+
 
 
     protected $_version                  = GF_MOMENTOUS_FEED_ADDON_VERSION;
@@ -31,7 +34,6 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
     public function init()
     {
         parent::init();
-
         $this->add_delayed_payment_support(
             array(
                 'option_label' => esc_html__('Subscribe contact to service x only when payment is received.', 'momentous'),
@@ -97,6 +99,20 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                         'class' => 'medium',
                         'required' => true,
                         'feedback_callback' => array($this, 'plugin_settings_fields_feedback_callback'),
+                    ),
+
+                    array(
+                        'name' => self::MOMENTOUS_ASYNC_SENDING_NAME,
+                        'label' => esc_html__('Send settings', 'gravityforms-momentous'),
+                        'type' => 'checkbox',
+                        'class' => 'medium',
+                        'feedback_callback' => array($this, 'plugin_settings_fields_feedback_callback'),
+                        "choices" => [
+                            [
+                                "label" => __(self::MOMENTOUS_ASYNC_SENDING_LABEL, "gravityforms-momentous"),
+                                "name"  => self::MOMENTOUS_ASYNC_SENDING_NAME,
+                            ]
+                        ]
                     ),
                 ),
             ),
@@ -229,38 +245,52 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $settings = $this->get_saved_plugin_settings();
         $api = new GF_Momentous_API($settings);
         if (isset($requests['accounts'])) {
-            $response = $api->request('Accounts', $requests['accounts'], 'POST');
-            if (isset($response['response']) && isset($response['response']['code'])) {
-                if ($response['response']['code'] == 200) {
-                    $resp = json_decode($response['body'], true);
-                    $this->log_debug('ACCOUNTS API ENDPOINT SUCCESS ' . $response['body']);
-                    if (isset($resp['AccountCode'])) {
-                        $opportunityBody = $requests['opportunities'];
-                        $opportunityBody['AccountCode'] = $resp['AccountCode'];
-                        $oppResponse =  $api->request('Opportunities', $opportunityBody, 'POST');
-                        if (isset($oppResponse['response']) && isset($oppResponse['response']['code'])) {
-                            if ($oppResponse['response']['code'] == 200) {
-                                $this->log_debug("OPPORTUNITIES API ENDPOINT SUCCESS" . $oppResponse['body']);
-                            } else {
-                                $this->log_debug('OPPORTUNITIES API ENDPOINT ERROR CODE:  ' .  $oppResponse['response']['code'] . ' ' . $oppResponse['response']['message']);
+            if ($settings['async'] == 1) {
+                $timeId = time();
+
+                $this->save_requests(array(
+                    'request_group' => $timeId,
+                    'entity' => 'Accounts',
+                    'body'  => json_encode($requests['accounts']),
+                    'created_at' => date('Y-m-d h:i:s', time())
+                ));
+                $this->save_requests(array(
+                    'request_group' => $timeId,
+                    'entity' => 'Opportunities',
+                    'body'  => json_encode($requests['opportunities']),
+                    'created_at' =>  date('Y-m-d h:i:s', time())
+                ));
+            } else {
+                $response = $api->request('Accounts', $requests['accounts'], 'POST');
+                if (isset($response['response']) && isset($response['response']['code'])) {
+                    if ($response['response']['code'] == 200) {
+                        $resp = json_decode($response['body'], true);
+                        $this->log_debug('ACCOUNTS API ENDPOINT SUCCESS ' . $response['body']);
+                        if (isset($resp['AccountCode'])) {
+                            $opportunityBody = $requests['opportunities'];
+                            $opportunityBody['AccountCode'] = $resp['AccountCode'];
+                            $oppResponse =  $api->request('Opportunities', $opportunityBody, 'POST');
+                            if (isset($oppResponse['response']) && isset($oppResponse['response']['code'])) {
+                                if ($oppResponse['response']['code'] == 200) {
+                                    $this->log_debug("OPPORTUNITIES API ENDPOINT SUCCESS" . $oppResponse['body']);
+                                } else {
+                                    $this->log_debug('OPPORTUNITIES API ENDPOINT ERROR CODE:  ' .  $oppResponse['response']['code'] . ' ' . $oppResponse['response']['message']);
+                                }
                             }
                         }
+                    } else {
+                        $this->log_debug('ACCOUNTS API ENDPOINT ERROR CODE:  ' .  $response['response']['code'] . ' ' . $response['response']['message']);
                     }
-                } else {
-                    $this->log_debug('ACCOUNTS API ENDPOINT ERROR CODE:  ' .  $response['response']['code'] . ' ' . $response['response']['message']);
                 }
             }
         }
-//        foreach ($requests as $endpoint => $body) {
-//            $response = $api->request(ucfirst($endpoint), $body, 'POST');
-//
-//            if (is_wp_error($response)) {
-//                $this->log_debug('RESPONSE: '  . $response->get_error_message());
-//            } else {
-//                $body = wp_remote_retrieve_body($response);
-//                $this->log_debug('RESPONSE ' . $body);
-//            }
-//        }
+    }
+
+    private function save_requests($data)
+    {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'momentous_requests';
+        $wpdb->insert($table_name, $data);
     }
 
     private function get_saved_plugin_settings()

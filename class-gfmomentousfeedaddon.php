@@ -234,6 +234,39 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         return $result;
     }
 
+    public function process_failed_async_requests()
+    {
+        global $wpdb;
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
+        $statement = $wpdb->prepare('SELECT * FROM ' . $table_name . ' where status=%s LIMIT 2', 'failed');
+        $results = $wpdb->get_results($statement, ARRAY_A);
+        foreach ($results as $result) {
+            $this->set_async_processing_state($result['id'], 'retrying');
+            $requests = json_decode($result['body'], true);
+            if ($requests['accounts_call_status'] !== 200) {
+                $messages = [];
+                $this->send($requests, $messages);
+                $this->process_messages_sent($result['id'], $messages);
+            } else {
+                //Process Opportunities
+                $accountsResponse = json_decode($result['accounts_response'], true);
+                $postBody = json_decode($result['body'], true);
+                if (isset($accountsResponse['AccountCode']) && isset($postBody['opportunities'])) {
+                    $opportunitiesBody = $postBody['opportunities'];
+                    $opportunitiesBody['AccountCode'] = $accountsResponse['AccountCode'];
+                    $response = $this->send_post('Opportunities', $opportunitiesBody);
+                    $this->set_async_processing_column($result['id'], 'opportunities_call_status', $response['response']['code']);
+                    $this->set_async_processing_column($result['id'], 'opportunities_response', $response['body']);
+                    if ($response['response']['code'] === 200) {
+                        $this->set_async_processing_state($result['id'], 'complete');
+                    } else {
+                        $this->set_async_processing_state($result['id'], 'failed');
+                    }
+                }
+            }
+        }
+    }
+
     public function process_async_requests()
     {
         global $wpdb;
@@ -245,19 +278,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             $requests = json_decode($result['body'], true);
             $messages = [];
             $this->send($requests, $messages);
-            $hasError = false;
-            foreach ($messages as $entity => $message) {
-                $this->set_async_processing_column($result['id'], $entity . '_call_status', $message['status']);
-                $this->set_async_processing_column($result['id'], $entity . '_response', $message['body']);
-                if ($message['status'] !== 200) {
-                    $hasError = true;
-                }
-            }
-            if (!$hasError) {
-                $this->set_async_processing_state($result['id'], 'completed');
-            } else {
-                $this->set_async_processing_state($result['id'], 'failed');
-            }
+            $this->process_messages_sent($result['id'], $messages);
         }
     }
     public function process_request($requests)
@@ -275,6 +296,14 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 $this->send($requests);
             }
         }
+    }
+
+    public function send_post($endpoint, $data)
+    {
+        require_once 'includes/class-gf-momentous-api.php';
+        $settings = $this->get_saved_plugin_settings();
+        $api = new GF_Momentous_API($settings);
+        return $api->request($endpoint, $data, 'POST');
     }
 
     public function send($requests, &$messages = null)
@@ -325,10 +354,28 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         }
     }
 
-    private function set_async_processing_column($id, $column, $value) {
+    private function process_messages_sent($id, $messages)
+    {
+        $hasError = false;
+        foreach ($messages as $entity => $message) {
+            $this->set_async_processing_column($id, $entity . '_call_status', $message['status']);
+            $this->set_async_processing_column($id, $entity . '_response', $message['body']);
+            if ($message['status'] !== 200) {
+                $hasError = true;
+            }
+        }
+        if (!$hasError) {
+            $this->set_async_processing_state($id, 'completed');
+        } else {
+            $this->set_async_processing_state($id, 'failed');
+        }
+    }
+
+    private function set_async_processing_column($id, $column, $value)
+    {
         global $wpdb;
         $table_name = $wpdb->prefix . self::REQUEST_TABLE;
-        $wpdb->update($table_name,[
+        $wpdb->update($table_name, [
             $column => $value
         ], ['id' => $id]);
     }
@@ -342,9 +389,14 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 'status' => $state,
                 'completed_at' => date('Y-m-d h:i:s', time())
             ], ['id' => $id]);
-        }  else if ($state == 'failed') {
+        } else if ($state == 'failed') {
             $wpdb->update($table_name, [
                 'status' => $state,
+            ], ['id' => $id]);
+        } else if ($state == 'retrying') {
+            $wpdb->update($table_name, [
+                'status' => $state,
+                'last_attempt_at' => date('Y-m-d h:i:s', time())
             ], ['id' => $id]);
         } else {
             $wpdb->update($table_name, [

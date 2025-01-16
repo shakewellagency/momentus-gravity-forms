@@ -13,6 +13,7 @@ define('GF_MOMENTOUS_FEED_ADDON_VERSION', '1.1');
 add_action('gform_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'load' ), 5);
 add_action('gform_after_submission', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'processSubmission' ), 5);
 add_action('momentous_async_send_cron', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'do_async_send' ));
+add_action('momentous_process_failed_requests_cron', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'process_async_failed_requests' ));
 
 add_filter('cron_schedules', array('GF_Momentous_Feed_AddOn_Bootstrap','cron_schedule_filter'));
 
@@ -76,6 +77,9 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         if (!wp_next_scheduled('momentous_async_send_cron')) {
             wp_schedule_event(time(), 'every_three_minutes', 'momentous_async_send_cron');
         }
+        if (!wp_next_scheduled('momentous_process_failed_requests_cron')) {
+            wp_schedule_event(time(), 'every_one_minute', 'momentous_process_failed_requests_cron');
+        }
     }
 
     public static function deactivate_cron()
@@ -83,6 +87,11 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         $timestamp = wp_next_scheduled('momentous_async_send_cron');
         if ($timestamp) {
             wp_unschedule_event($timestamp, 'momentous_async_send_cron');
+        }
+
+        $timestamp = wp_next_scheduled('momentous_process_failed_requests_cron');
+        if ($timestamp) {
+            wp_unschedule_event($timestamp, 'momentous_process_failed_requests_cron');
         }
     }
 
@@ -92,9 +101,18 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         $object->process_async_requests();
     }
 
+    public static function process_async_failed_requests() {
+        $object = gf_momentous_feed_addon();
+        $object->process_failed_async_requests();
+    }
+
     public static function cron_schedule_filter() {
         $schedules['every_three_minutes'] = [
             'interval' => 180, // 180 seconds = 3 minutes
+            'display'  => __('Every 3 Minutes'),
+        ];
+        $schedules['every_one_minute'] = [
+            'interval' => 120, // 60 seconds = 1 minute
             'display'  => __('Every 3 Minutes'),
         ];
         return $schedules;

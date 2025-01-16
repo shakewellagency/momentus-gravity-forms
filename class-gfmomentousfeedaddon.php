@@ -18,6 +18,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
     const MOMENTOUS_CLIENT_SECRET_NAME = 'client_secret';
     const MOMENTOUS_ASYNC_SENDING_NAME = 'async';
     const MOMENTOUS_ASYNC_SENDING_LABEL = 'Enable Asynchronous sending';
+    const REQUEST_TABLE = 'momentous_requests';
 
 
 
@@ -40,7 +41,6 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             )
         );
     }
-
     public function scripts()
     {
         $scripts = [
@@ -59,7 +59,6 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         ];
         return array_merge(parent::scripts(), $scripts);
     }
-
     public function plugin_settings_fields()
     {
 
@@ -118,7 +117,6 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             ),
         );
     }
-
     public function feed_settings_fields()
     {
 
@@ -192,12 +190,10 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             ],
         ];
     }
-
     public function process_feed($feed, $entry, $form)
     {
         //Silence is golden
     }
-
     public function get_mapped_fields($formId)
     {
         global $wpdb;
@@ -226,7 +222,6 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $this->log_debug('Mapped field are ' . var_export($mapping, true));
         return $mapping;
     }
-
     public function process_mapped_fields($mapping, $inputs)
     {
         $result = [];
@@ -239,50 +234,123 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         return $result;
     }
 
-    public function send($requests)
+    public function process_async_requests()
+    {
+        global $wpdb;
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
+        $statement = $wpdb->prepare('SELECT * FROM ' . $table_name . ' where status=%s LIMIT 10', 'new');
+        $results = $wpdb->get_results($statement, ARRAY_A);
+        foreach ($results as $result) {
+            $this->set_async_processing_state($result['id']);
+            $requests = json_decode($result['body'], true);
+            $messages = [];
+            $this->send($requests, $messages);
+            $hasError = false;
+            foreach ($messages as $entity => $message) {
+                $this->set_async_processing_column($result['id'], $entity . '_call_status', $message['status']);
+                $this->set_async_processing_column($result['id'], $entity . '_response', $message['body']);
+                if ($message['status'] !== 200) {
+                    $hasError = true;
+                }
+            }
+            if (!$hasError) {
+                $this->set_async_processing_state($result['id'], 'completed');
+            } else {
+                $this->set_async_processing_state($result['id'], 'failed');
+            }
+        }
+    }
+    public function process_request($requests)
+    {
+        $settings = $this->get_saved_plugin_settings();
+        if (isset($requests['accounts']) && isset($requests['opportunities'])) {
+            if ($settings['async'] == 1) {
+                $timeId = time();
+                $this->save_requests(array(
+                    'body'  => json_encode($requests),
+                    'status' => 'new',
+                    'created_at' => date('Y-m-d h:i:s', time())
+                ));
+            } else {
+                $this->send($requests);
+            }
+        }
+    }
+
+    public function send($requests, &$messages = null)
     {
         require_once 'includes/class-gf-momentous-api.php';
         $settings = $this->get_saved_plugin_settings();
         $api = new GF_Momentous_API($settings);
-        if (isset($requests['accounts'])) {
-            if ($settings['async'] == 1) {
-                $timeId = time();
+        $wasSuccessful = false;
+        $response = $api->request('Accounts', $requests['accounts'], 'POST');
+        if (isset($response['response']) && isset($response['response']['code'])) {
+            if ($response['response']['code'] == 200) {
+                $resp = json_decode($response['body'], true);
+                if ($messages !== null) {
+                    $messages['accounts'] = [
+                        'status' => $response['response']['code'],
+                        'body' => $response['body']
+                    ];
+                }
+                $this->log_debug('ACCOUNTS API ENDPOINT SUCCESS ' . $response['body']);
+                if (isset($resp['AccountCode'])) {
+                    $opportunityBody = $requests['opportunities'];
+                    $opportunityBody['AccountCode'] = $resp['AccountCode'];
+                    $oppResponse =  $api->request('Opportunities', $opportunityBody, 'POST');
 
-                $this->save_requests(array(
-                    'request_group' => $timeId,
-                    'entity' => 'Accounts',
-                    'body'  => json_encode($requests['accounts']),
-                    'created_at' => date('Y-m-d h:i:s', time())
-                ));
-                $this->save_requests(array(
-                    'request_group' => $timeId,
-                    'entity' => 'Opportunities',
-                    'body'  => json_encode($requests['opportunities']),
-                    'created_at' =>  date('Y-m-d h:i:s', time())
-                ));
-            } else {
-                $response = $api->request('Accounts', $requests['accounts'], 'POST');
-                if (isset($response['response']) && isset($response['response']['code'])) {
-                    if ($response['response']['code'] == 200) {
-                        $resp = json_decode($response['body'], true);
-                        $this->log_debug('ACCOUNTS API ENDPOINT SUCCESS ' . $response['body']);
-                        if (isset($resp['AccountCode'])) {
-                            $opportunityBody = $requests['opportunities'];
-                            $opportunityBody['AccountCode'] = $resp['AccountCode'];
-                            $oppResponse =  $api->request('Opportunities', $opportunityBody, 'POST');
-                            if (isset($oppResponse['response']) && isset($oppResponse['response']['code'])) {
-                                if ($oppResponse['response']['code'] == 200) {
-                                    $this->log_debug("OPPORTUNITIES API ENDPOINT SUCCESS" . $oppResponse['body']);
-                                } else {
-                                    $this->log_debug('OPPORTUNITIES API ENDPOINT ERROR CODE:  ' .  $oppResponse['response']['code'] . ' ' . $oppResponse['response']['message']);
-                                }
-                            }
+                    if ($messages !== null) {
+                        $messages['opportunities'] = [
+                            'status' => $oppResponse['response']['code'],
+                            'body' => $oppResponse['body']
+                        ];
+                    }
+                    if (isset($oppResponse['response']) && isset($oppResponse['response']['code'])) {
+                        if ($oppResponse['response']['code'] == 200) {
+                            $this->log_debug("OPPORTUNITIES API ENDPOINT SUCCESS" . $oppResponse['body']);
+                        } else {
+                            $this->log_debug('OPPORTUNITIES API ENDPOINT ERROR CODE:  ' .  $oppResponse['response']['code'] . ' ' . $oppResponse['response']['message']);
                         }
-                    } else {
-                        $this->log_debug('ACCOUNTS API ENDPOINT ERROR CODE:  ' .  $response['response']['code'] . ' ' . $response['response']['message']);
                     }
                 }
+            } else {
+                if ($messages !== null) {
+                    $messages['accounts'] = [
+                        'status' => $response['response']['code'],
+                        'body' => $response['body']
+                    ];
+                }
+                $this->log_debug('ACCOUNTS API ENDPOINT ERROR CODE:  ' .  $response['response']['code'] . ' ' . $response['response']['message']);
             }
+        }
+    }
+
+    private function set_async_processing_column($id, $column, $value) {
+        global $wpdb;
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
+        $wpdb->update($table_name,[
+            $column => $value
+        ], ['id' => $id]);
+    }
+
+    private function set_async_processing_state($id, $state = 'processing')
+    {
+        global $wpdb;
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
+        if ($state == 'completed') {
+            $wpdb->update($table_name, [
+                'status' => $state,
+                'completed_at' => date('Y-m-d h:i:s', time())
+            ], ['id' => $id]);
+        }  else if ($state == 'failed') {
+            $wpdb->update($table_name, [
+                'status' => $state,
+            ], ['id' => $id]);
+        } else {
+            $wpdb->update($table_name, [
+                'status' => $state,
+                'executed_at' => date('Y-m-d h:i:s', time())
+            ], ['id' => $id]);
         }
     }
 
@@ -292,7 +360,6 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $table_name = $wpdb->prefix . 'momentous_requests';
         $wpdb->insert($table_name, $data);
     }
-
     private function get_saved_plugin_settings()
     {
         $prefix  = $this->is_gravityforms_supported('2.5') ? '_gform_setting' : '_gaddon_setting';
@@ -313,7 +380,6 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
 
         return $settings;
     }
-
     public function feed_list_columns()
     {
         return array(
@@ -323,7 +389,6 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             'default_value' => esc_html__('Default value', 'momentous'),
         );
     }
-
     public function get_column_value_form_field($item)
     {
         if (isset($item['form_id']) && isset($item['meta'])) {
@@ -333,7 +398,6 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             }
         }
     }
-
     public function get_column_value_entity($item)
     {
         if (isset($item['form_id']) && isset($item['meta'])) {
@@ -342,8 +406,6 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             }
         }
     }
-
-
 
     public static function get_instance()
     {

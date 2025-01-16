@@ -11,16 +11,19 @@ Author URI: https://www.shakewell.agency/
 define('GF_MOMENTOUS_FEED_ADDON_VERSION', '1.1');
 
 add_action('gform_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'load' ), 5);
-
 add_action('gform_after_submission', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'processSubmission' ), 5);
+add_action('momentous_async_send_cron', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'do_async_send' ));
 
+add_filter('cron_schedules', array('GF_Momentous_Feed_AddOn_Bootstrap','cron_schedule_filter'));
+
+register_activation_hook(__FILE__, array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'activate_cron' ));
 register_activation_hook(__FILE__, array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'create_table' ));
-
 register_deactivation_hook(__FILE__, array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'delete_table' ));
-
+register_deactivation_hook(__FILE__, array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'deactivate_cron' ));
 
 class GF_Momentous_Feed_AddOn_Bootstrap
 {
+    const REQUEST_TABLE = 'momentous_requests';
 
     public static function load()
     {
@@ -40,17 +43,20 @@ class GF_Momentous_Feed_AddOn_Bootstrap
 
         $charset_collate = $wpdb->get_charset_collate();
 
-        $table_name = $wpdb->prefix . 'momentous_requests';
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
 
         $sql = "CREATE TABLE " . $table_name . " (
-             id         int auto_increment,
-            entity      VARCHAR(50) not null,
+            id         int auto_increment,
             body        LONGTEXT    not null,
-            status      varchar(10) null,
-            response    LONGTEXT    null,
+            accounts_call_status      varchar(10) null,
+            opportunities_call_status varchar(10) null,
+            status       varchar(10) not null,
+            accounts_response    LONGTEXT    null,
+            opportunities_response    LONGTEXT    null,
             created_at  TIMESTAMP   not null,
             executed_at TIMESTAMP   null,
-            request_group BIGINT not null,
+            last_attempt_at TIMESTAMP null,
+            completed_at TIMESTAMP null,
             constraint PRIMARY_ID_KEY
                 primary key (id)
         ) $charset_collate;";
@@ -60,8 +66,38 @@ class GF_Momentous_Feed_AddOn_Bootstrap
     public static function delete_table()
     {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'momentous_requests';
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
         $wpdb->query("DROP TABLE IF EXISTS $table_name");
+    }
+
+
+    public static function activate_cron()
+    {
+        if (!wp_next_scheduled('momentous_async_send_cron')) {
+            wp_schedule_event(time(), 'every_three_minutes', 'momentous_async_send_cron');
+        }
+    }
+
+    public static function deactivate_cron()
+    {
+        $timestamp = wp_next_scheduled('momentous_async_send_cron');
+        if ($timestamp) {
+            wp_unschedule_event($timestamp, 'momentous_async_send_cron');
+        }
+    }
+
+    public static function do_async_send()
+    {
+        $object = gf_momentous_feed_addon();
+        $object->process_async_requests();
+    }
+
+    public static function cron_schedule_filter() {
+        $schedules['every_three_minutes'] = [
+            'interval' => 180, // 180 seconds = 3 minutes
+            'display'  => __('Every 3 Minutes'),
+        ];
+        return $schedules;
     }
 
     public static function processSubmission($form)
@@ -69,7 +105,7 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         $object = gf_momentous_feed_addon();
         $mapping = $object->get_mapped_fields($form['form_id']);
         $values = $object->process_mapped_fields($mapping, $form);
-        $object->send($values);
+        $object->process_request($values);
     }
 }
 

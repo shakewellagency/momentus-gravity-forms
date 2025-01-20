@@ -240,6 +240,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $table_name = $wpdb->prefix . self::REQUEST_TABLE;
         $statement = $wpdb->prepare('SELECT * FROM ' . $table_name . ' where status=%s LIMIT 2', 'failed');
         $results = $wpdb->get_results($statement, ARRAY_A);
+        $this->log_debug(__METHOD__ . ' processing > ' .  var_export($results, true));
         foreach ($results as $result) {
             $this->set_async_processing_state($result['id'], 'retrying');
             $requests = json_decode($result['body'], true);
@@ -259,8 +260,10 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                     $this->set_async_processing_column($result['id'], 'opportunities_response', $response['body']);
                     if ($response['response']['code'] === 200) {
                         $this->set_async_processing_state($result['id'], 'complete');
+                        $this->log_debug(__METHOD__ . ' completed > ' .  var_export($result, true));
                     } else {
                         $this->set_async_processing_state($result['id'], 'failed');
+                        $this->log_debug(__METHOD__ . ' failed > ' .  var_export($result, true));
                     }
                 }
             }
@@ -273,6 +276,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $table_name = $wpdb->prefix . self::REQUEST_TABLE;
         $statement = $wpdb->prepare('SELECT * FROM ' . $table_name . ' where status=%s LIMIT 10', 'new');
         $results = $wpdb->get_results($statement, ARRAY_A);
+        $this->log_debug(__METHOD__ . ' processing > ' .  var_export($results, true));
         foreach ($results as $result) {
             $this->set_async_processing_state($result['id']);
             $requests = json_decode($result['body'], true);
@@ -366,8 +370,10 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         }
         if (!$hasError) {
             $this->set_async_processing_state($id, 'completed');
+            $this->log_debug(__METHOD__ . ' completed > ' . $id);
         } else {
             $this->set_async_processing_state($id, 'failed');
+            $this->log_debug(__METHOD__ . ' failed > ' . $id);
         }
     }
 

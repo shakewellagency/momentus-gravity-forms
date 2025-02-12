@@ -329,7 +329,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 $this->log_debug('ACCOUNTS API ENDPOINT SUCCESS ' . $response['body']);
                 if (isset($resp['AccountCode'])) {
                     $opportunityBody = $requests['opportunities'];
-                    $opportunityBody['AccountCode'] = $resp['AccountCode'];
+                    $opportunityBody['Account'] = $resp['AccountCode'];
                     $oppResponse =  $api->request('Opportunities', $opportunityBody, 'POST');
 
                     if ($messages !== null) {

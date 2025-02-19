@@ -14,6 +14,7 @@
                 { label: 'Event Sales Status', value: 'EventSalesStatus'},
                 { label: 'Account Representative', value: 'AccountRep'},
                 { label: 'Direct Mail Opt In', value: 'DirectMailOptIn'},
+                { label: 'Type', value: 'Type'},
             ],
             opportunities: [
                 { label: 'Type', value: 'Type'},

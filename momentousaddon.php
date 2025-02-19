@@ -3,12 +3,12 @@
 Plugin Name: Gravity Forms Momentous Feed Add-On
 Plugin URI: https://www.shakewell.agency/
 Description: An add-on for Momentous
-Version: 1.4
+Version: 1.5
 Author: Shakewell
 Author URI: https://www.shakewell.agency/
 */
 
-define('GF_MOMENTOUS_FEED_ADDON_VERSION', '1.4');
+define('GF_MOMENTOUS_FEED_ADDON_VERSION', '1.5');
 
 add_action('gform_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'load' ), 5);
 add_action('gform_after_submission', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'processSubmission' ), 5);

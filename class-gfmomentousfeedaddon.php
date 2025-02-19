@@ -245,15 +245,23 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $form = GFAPI::get_form($inputs['form_id']);
         $checkboxes = GFAPI::get_fields_by_type($form, array( 'consent', 'checkbox' ), true);
         $value = false;
+        $multiValues = [];
         foreach ($checkboxes as $checkbox) {
             if ($checkbox->id == $formField) {
                 foreach ($checkboxIdxs as $checkboxIdx) {
                     if (!empty($inputs[$checkboxIdx]) && !$value) {
-                        $value = true;
+                        if ($checkbox->cssClass !== 'non-boolean') {
+                            $value = true;
+                        } else {
+                            $multiValues[] = $inputs[$checkboxIdx];
+                        }
                     }
                 }
                 break;
             }
+        }
+        if (!empty($multiValues)) {
+            return implode(',', $multiValues);
         }
         return $value;
     }

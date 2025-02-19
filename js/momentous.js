@@ -11,6 +11,9 @@
                 { label: 'Mobile Number', value: 'Mobile'},
                 { label: 'Organization', value: 'Organization'},
                 { label: 'Class', value: 'Class'},
+                { label: 'Event Sales Status', value: 'EventSalesStatus'},
+                { label: 'Account Representative', value: 'AccountRep'},
+                { label: 'Direct Mail Opt In', value: 'DirectMailOptIn'},
             ],
             opportunities: [
                 { label: 'Type', value: 'Type'},

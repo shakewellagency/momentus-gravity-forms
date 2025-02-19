@@ -227,11 +227,35 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $result = [];
         foreach ($mapping as $entity => $fields) {
             foreach ($fields as $field) {
-                $result[$entity][$field['entity_field']] = !empty(rgar($inputs, $field['form_field'])) ? rgar($inputs, $field['form_field']) : $field['default_value'];
+                $formField = $field['form_field'];
+                $matches = array_filter(array_keys($inputs), fn($v) => intval($v) == $formField && fmod($v, 1) !=0);
+                if (count($matches) === 0) {
+                    $result[$entity][$field['entity_field']] = !empty(rgar($inputs, $field['form_field'])) ? rgar($inputs, $field['form_field']) : $field['default_value'];
+                } else {
+                    $result[$entity][$field['entity_field']] = $this->process_checkbox_value($inputs, $formField, $matches);
+                }
             }
         }
         $this->log_debug('Processed fields are ' . var_export($result, true));
         return $result;
+    }
+
+    public function process_checkbox_value($inputs, $formField, $checkboxIdxs)
+    {
+        $form = GFAPI::get_form($inputs['form_id']);
+        $checkboxes = GFAPI::get_fields_by_type($form, array( 'consent', 'checkbox' ), true);
+        $value = false;
+        foreach ($checkboxes as $checkbox) {
+            if ($checkbox->id == $formField) {
+                foreach ($checkboxIdxs as $checkboxIdx) {
+                    if (!empty($inputs[$checkboxIdx]) && !$value) {
+                        $value = true;
+                    }
+                }
+                break;
+            }
+        }
+        return $value;
     }
 
     public function process_failed_async_requests()

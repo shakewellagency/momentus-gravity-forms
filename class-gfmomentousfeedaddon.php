@@ -276,7 +276,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         foreach ($results as $result) {
             $this->set_async_processing_state($result['id'], 'retrying');
             $requests = json_decode($result['body'], true);
-            if ($requests['accounts_call_status'] !== 200) {
+            if ($result['accounts_call_status'] !== 200) {
                 $messages = [];
                 $this->send($requests, $messages);
                 $this->process_messages_sent($result['id'], $messages);

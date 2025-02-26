@@ -270,13 +270,13 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
     {
         global $wpdb;
         $table_name = $wpdb->prefix . self::REQUEST_TABLE;
-        $statement = $wpdb->prepare('SELECT * FROM ' . $table_name . ' where status=%s LIMIT 2', 'failed');
+        $statement = $wpdb->prepare('SELECT * FROM ' . $table_name . ' where status=%s LIMIT 1', 'failed');
         $results = $wpdb->get_results($statement, ARRAY_A);
         $this->log_debug(__METHOD__ . ' processing > ' .  var_export($results, true));
         foreach ($results as $result) {
             $this->set_async_processing_state($result['id'], 'retrying');
             $requests = json_decode($result['body'], true);
-            if ($result['accounts_call_status'] !== 200) {
+            if ($result['accounts_call_status'] != 200) {
                 $messages = [];
                 $this->send($requests, $messages);
                 $this->process_messages_sent($result['id'], $messages);
@@ -306,7 +306,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
     {
         global $wpdb;
         $table_name = $wpdb->prefix . self::REQUEST_TABLE;
-        $statement = $wpdb->prepare('SELECT * FROM ' . $table_name . ' where status=%s LIMIT 10', 'new');
+        $statement = $wpdb->prepare('SELECT * FROM ' . $table_name . ' where status=%s LIMIT 1', 'new');
         $results = $wpdb->get_results($statement, ARRAY_A);
         $this->log_debug(__METHOD__ . ' processing > ' .  var_export($results, true));
         foreach ($results as $result) {

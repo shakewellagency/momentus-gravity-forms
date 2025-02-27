@@ -250,10 +250,10 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             if ($checkbox->id == $formField) {
                 foreach ($checkboxIdxs as $checkboxIdx) {
                     if (!empty($inputs[$checkboxIdx]) && !$value) {
-                        if ($checkbox->cssClass !== 'non-boolean') {
-                            $value = true;
-                        } else {
+                        if (preg_match('/non-boolean/', $checkbox->cssClass)) {
                             $multiValues[] = $inputs[$checkboxIdx];
+                        } else {
+                            $value = true;
                         }
                     }
                 }

@@ -3,12 +3,12 @@
 Plugin Name: Gravity Forms Momentous Feed Add-On
 Plugin URI: https://www.shakewell.agency/
 Description: An add-on for Momentous
-Version: 1.7
+Version: 1.8
 Author: Shakewell
 Author URI: https://www.shakewell.agency/
 */
 
-define('GF_MOMENTOUS_FEED_ADDON_VERSION', '1.7');
+define('GF_MOMENTOUS_FEED_ADDON_VERSION', '1.8');
 
 add_action('gform_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'load' ), 5);
 add_action('gform_after_submission', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'processSubmission' ), 5);
@@ -75,10 +75,10 @@ class GF_Momentous_Feed_AddOn_Bootstrap
     public static function activate_cron()
     {
         if (!wp_next_scheduled('momentous_async_send_cron')) {
-            wp_schedule_event(time(), 'every_three_minutes', 'momentous_async_send_cron');
+            wp_schedule_event(time(), 'every_one_minute', 'momentous_async_send_cron');
         }
         if (!wp_next_scheduled('momentous_process_failed_requests_cron')) {
-            wp_schedule_event(time(), 'every_one_minute', 'momentous_process_failed_requests_cron');
+            wp_schedule_event(time(), 'every_two_minutes', 'momentous_process_failed_requests_cron');
         }
     }
 
@@ -107,13 +107,13 @@ class GF_Momentous_Feed_AddOn_Bootstrap
     }
 
     public static function cron_schedule_filter() {
-        $schedules['every_three_minutes'] = [
-            'interval' => 180, // 180 seconds = 3 minutes
-            'display'  => __('Every 3 Minutes'),
+        $schedules['every_two_minutes'] = [
+            'interval' => 120, // 180 seconds = 3 minutes
+            'display'  => __('Every minute'),
         ];
         $schedules['every_one_minute'] = [
-            'interval' => 120, // 60 seconds = 1 minute
-            'display'  => __('Every 3 Minutes'),
+            'interval' => 60, // 60 seconds = 1 minute
+            'display'  => __('Every minute'),
         ];
         return $schedules;
     }

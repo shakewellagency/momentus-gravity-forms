@@ -18,6 +18,8 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
     const MOMENTOUS_CLIENT_SECRET_NAME = 'client_secret';
     const MOMENTOUS_ASYNC_SENDING_NAME = 'async';
     const MOMENTOUS_ASYNC_SENDING_LABEL = 'Enable Asynchronous sending';
+    const MOMENTOUS_FAILED_EMAIL_NOTIFICATION_LABEL = 'Email to receive CRON failure alerts';
+    const MOMENTOUS_FAILED_EMAIL_NOTIFICATION_NAME = 'email_cron_failure_alerts';
     const REQUEST_TABLE = 'momentous_requests';
 
 
@@ -112,6 +114,14 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                                 "name"  => self::MOMENTOUS_ASYNC_SENDING_NAME,
                             ]
                         ]
+                    ),
+                    array(
+                        'name' => self::MOMENTOUS_FAILED_EMAIL_NOTIFICATION_NAME,
+                        'label' => esc_html__(self::MOMENTOUS_FAILED_EMAIL_NOTIFICATION_LABEL, 'gravityforms-momentous'),
+                        'type' => 'text',
+                        'class' => 'medium',
+                        'required' => true,
+                        'feedback_callback' => array($this, 'plugin_settings_fields_feedback_callback'),
                     ),
                 ),
             ),

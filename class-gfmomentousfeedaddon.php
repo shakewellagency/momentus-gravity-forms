@@ -240,7 +240,14 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 $formField = $field['form_field'];
                 $matches = array_filter(array_keys($inputs), fn($v) => intval($v) == $formField && fmod($v, 1) !=0);
                 if (count($matches) === 0) {
-                    $result[$entity][$field['entity_field']] = !empty(rgar($inputs, $field['form_field'])) ? rgar($inputs, $field['form_field']) : $field['default_value'];
+                    $value = rgar($inputs, $formField);
+                    // Preserve "0" values, only treat truly blank as empty
+                    if (is_array($value)) {
+                        $value = implode(', ', array_map('trim', $value));
+                    } else {
+                        $value = trim((string) $value);
+                    }
+                    $result[$entity][$field['entity_field']] = ($value === '') ? $field['default_value'] : $value;
                 } else {
                     $result[$entity][$field['entity_field']] = $this->process_checkbox_value($inputs, $formField, $matches);
                 }

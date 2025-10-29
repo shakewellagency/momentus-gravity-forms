@@ -229,7 +229,14 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             }
             $mapping[$entity][]= $entry;
         }
-        $this->log_debug('Mapped field are ' . var_export($mapping, true));
+
+        // Log entity counts instead of full array
+        $entityCount = array_map('count', $mapping);
+        $this->log_debug(sprintf(
+            '[Field Mapping] Form #%d | Entities: %s',
+            $formId,
+            json_encode($entityCount)
+        ));
         return $mapping;
     }
     public function process_mapped_fields($mapping, $inputs)
@@ -253,7 +260,15 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 }
             }
         }
-        $this->log_debug('Processed fields are ' . var_export($result, true));
+
+        // Log processed fields by entity with field names
+        foreach ($result as $entity => $fields) {
+            $this->log_debug(sprintf(
+                '[Field Processing] %s | Fields: %s',
+                ucfirst($entity),
+                implode(', ', array_keys($fields))
+            ));
+        }
         return $result;
     }
 
@@ -289,30 +304,68 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $table_name = $wpdb->prefix . self::REQUEST_TABLE;
         $statement = $wpdb->prepare('SELECT * FROM ' . $table_name . ' where status=%s LIMIT 1', 'failed');
         $results = $wpdb->get_results($statement, ARRAY_A);
-        $this->log_debug(__METHOD__ . ' processing > ' .  var_export($results, true));
+
+        if (empty($results)) {
+            $this->log_debug('[Retry] No failed requests');
+            return;
+        }
+
+        $this->log_debug(sprintf('[Retry] Found %d failed request(s)', count($results)));
+
         foreach ($results as $result) {
-            $this->set_async_processing_state($result['id'], 'retrying');
+            $requestId = $result['id'];
+            $attemptInfo = $result['last_attempt_at'] ?? 'never';
+
+            $this->log_debug(sprintf(
+                '[Retry] Request #%d | Last Attempt: %s | Account Status: %s | Opp Status: %s',
+                $requestId,
+                $attemptInfo,
+                $result['accounts_call_status'] ?? 'N/A',
+                $result['opportunities_call_status'] ?? 'N/A'
+            ));
+
+            $this->set_async_processing_state($requestId, 'retrying');
             $requests = json_decode($result['body'], true);
+
             if ($result['accounts_call_status'] != 200) {
+                $this->log_debug("[Retry] Request #$requestId | Retrying Accounts endpoint");
                 $messages = [];
                 $this->send($requests, $messages);
-                $this->process_messages_sent($result['id'], $messages);
+                $this->process_messages_sent($requestId, $messages);
             } else {
                 //Process Opportunities
                 $accountsResponse = json_decode($result['accounts_response'], true);
                 $postBody = json_decode($result['body'], true);
+
+                // Log Account details even though it succeeded
+                if (isset($postBody['accounts'])) {
+                    $this->log_debug("[Retry] Account Request Body (Already Succeeded): " . json_encode($postBody['accounts']));
+                }
+
                 if (isset($accountsResponse['AccountCode']) && isset($postBody['opportunities'])) {
+                    $accountCode = $accountsResponse['AccountCode'];
+                    $this->log_debug("[Retry] Request #$requestId | Retrying Opportunities for Account: $accountCode");
+
                     $opportunitiesBody = $postBody['opportunities'];
-                    $opportunitiesBody['AccountCode'] = $accountsResponse['AccountCode'];
+                    $opportunitiesBody['AccountCode'] = $accountCode;
+                    $this->log_debug("[Retry] Opportunity Request Body: " . json_encode($opportunitiesBody));
+
                     $response = $this->send_post('Opportunities', $opportunitiesBody);
-                    $this->set_async_processing_column($result['id'], 'opportunities_call_status', $response['response']['code']);
-                    $this->set_async_processing_column($result['id'], 'opportunities_response', $response['body']);
+                    $this->set_async_processing_column($requestId, 'opportunities_call_status', $response['response']['code']);
+                    $this->set_async_processing_column($requestId, 'opportunities_response', $response['body']);
+
                     if ($response['response']['code'] === 200) {
-                        $this->set_async_processing_state($result['id'], 'complete');
-                        $this->log_debug(__METHOD__ . ' completed > ' .  var_export($result, true));
+                        $this->set_async_processing_state($requestId, 'complete');
+                        $this->log_debug("[Retry] Request #$requestId completed | Opportunity: HTTP 200");
                     } else {
-                        $this->set_async_processing_state($result['id'], 'failed');
-                        $this->log_debug(__METHOD__ . ' failed > ' .  var_export($result, true));
+                        $this->set_async_processing_state($requestId, 'failed');
+                        $errorMsg = $response['response']['message'] ?? 'Unknown error';
+                        $this->log_debug(sprintf(
+                            '[Retry] Request #%d failed again | Opportunity: HTTP %d | Error: %s',
+                            $requestId,
+                            $response['response']['code'],
+                            $errorMsg
+                        ));
                     }
                 }
             }
@@ -325,13 +378,36 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $table_name = $wpdb->prefix . self::REQUEST_TABLE;
         $statement = $wpdb->prepare('SELECT * FROM ' . $table_name . ' where status=%s LIMIT 1', 'new');
         $results = $wpdb->get_results($statement, ARRAY_A);
-        $this->log_debug(__METHOD__ . ' processing > ' .  var_export($results, true));
+
+        if (empty($results)) {
+            $this->log_debug('[Async] No pending requests');
+            return;
+        }
+
         foreach ($results as $result) {
-            $this->set_async_processing_state($result['id']);
+            $requestId = $result['id'];
+            $this->log_debug(sprintf(
+                '[Async] Request #%d | Status: %s | Created: %s',
+                $requestId,
+                $result['status'],
+                $result['created_at']
+            ));
+
+            $this->set_async_processing_state($requestId);
             $requests = json_decode($result['body'], true);
+
+            // Log key identifiers only
+            $accountInfo = sprintf(
+                '%s %s <%s>',
+                $requests['accounts']['FirstName'] ?? '',
+                $requests['accounts']['LastName'] ?? '',
+                $requests['accounts']['Email'] ?? ''
+            );
+            $this->log_debug("[Async] Request #$requestId | Account: $accountInfo");
+
             $messages = [];
             $this->send($requests, $messages);
-            $this->process_messages_sent($result['id'], $messages);
+            $this->process_messages_sent($requestId, $messages);
         }
     }
     public function process_request($requests)
@@ -364,45 +440,87 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         require_once 'includes/class-gf-momentous-api.php';
         $settings = $this->get_saved_plugin_settings();
         $api = new GF_Momentous_API($settings);
-        $wasSuccessful = false;
+
+        // Log request start with body data
+        $accountEmail = $requests['accounts']['Email'] ?? 'N/A';
+        $this->log_debug("[API] Sending Account | Email: $accountEmail");
+        $this->log_debug("[API] Account Request Body: " . json_encode($requests['accounts']));
+
         $response = $api->request('Accounts', $requests['accounts'], 'POST');
+
         if (isset($response['response']) && isset($response['response']['code'])) {
-            if ($response['response']['code'] == 200) {
+            $statusCode = $response['response']['code'];
+
+            if ($statusCode == 200) {
                 $resp = json_decode($response['body'], true);
+                $accountCode = $resp['AccountCode'] ?? 'N/A';
+
+                $this->log_debug(sprintf(
+                    '[API] Account Created | Code: %s | HTTP: %d',
+                    $accountCode,
+                    $statusCode
+                ));
+
                 if ($messages !== null) {
                     $messages['accounts'] = [
-                        'status' => $response['response']['code'],
+                        'status' => $statusCode,
                         'body' => $response['body']
                     ];
                 }
-                $this->log_debug('ACCOUNTS API ENDPOINT SUCCESS ' . $response['body']);
+
                 if (isset($resp['AccountCode'])) {
                     $opportunityBody = $requests['opportunities'];
                     $opportunityBody['Account'] = $resp['AccountCode'];
-                    $oppResponse =  $api->request('Opportunities', $opportunityBody, 'POST');
+
+                    $oppType = $opportunityBody['Type'] ?? 'N/A';
+                    $this->log_debug("[API] Sending Opportunity | Type: $oppType | Account: {$resp['AccountCode']}");
+                    $this->log_debug("[API] Opportunity Request Body: " . json_encode($opportunityBody));
+
+                    $oppResponse = $api->request('Opportunities', $opportunityBody, 'POST');
+                    $oppStatusCode = $oppResponse['response']['code'] ?? 0;
 
                     if ($messages !== null) {
                         $messages['opportunities'] = [
-                            'status' => $oppResponse['response']['code'],
+                            'status' => $oppStatusCode,
                             'body' => $oppResponse['body']
                         ];
                     }
-                    if (isset($oppResponse['response']) && isset($oppResponse['response']['code'])) {
-                        if ($oppResponse['response']['code'] == 200) {
-                            $this->log_debug("OPPORTUNITIES API ENDPOINT SUCCESS" . $oppResponse['body']);
-                        } else {
-                            $this->log_debug('OPPORTUNITIES API ENDPOINT ERROR CODE:  ' .  $oppResponse['response']['code'] . ' ' . $oppResponse['response']['message']);
+
+                    if ($oppStatusCode == 200) {
+                        $this->log_debug("[API] Opportunity Created | HTTP: $oppStatusCode");
+                    } else {
+                        $errorMsg = $oppResponse['response']['message'] ?? 'Unknown error';
+                        $this->log_debug(sprintf(
+                            '[API] Opportunity Failed | HTTP: %d | Error: %s',
+                            $oppStatusCode,
+                            $errorMsg
+                        ));
+                        // Only log response body on error for debugging (truncated)
+                        if ($oppStatusCode >= 400) {
+                            $this->log_debug('[API Error Response] ' . substr($oppResponse['body'], 0, 500));
                         }
                     }
                 }
             } else {
+                $errorMsg = $response['response']['message'] ?? 'Unknown error';
+                $this->log_debug(sprintf(
+                    '[API] Account Failed | HTTP: %d | Error: %s | Email: %s',
+                    $statusCode,
+                    $errorMsg,
+                    $accountEmail
+                ));
+
+                // Log error response body (truncated)
+                if ($statusCode >= 400) {
+                    $this->log_debug('[API Error Response] ' . substr($response['body'], 0, 500));
+                }
+
                 if ($messages !== null) {
                     $messages['accounts'] = [
-                        'status' => $response['response']['code'],
+                        'status' => $statusCode,
                         'body' => $response['body']
                     ];
                 }
-                $this->log_debug('ACCOUNTS API ENDPOINT ERROR CODE:  ' .  $response['response']['code'] . ' ' . $response['response']['message']);
             }
         }
     }
@@ -410,19 +528,34 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
     private function process_messages_sent($id, $messages)
     {
         $hasError = false;
+        $summary = [];
+
         foreach ($messages as $entity => $message) {
             $this->set_async_processing_column($id, $entity . '_call_status', $message['status']);
             $this->set_async_processing_column($id, $entity . '_response', $message['body']);
+
+            $status = $message['status'] === 200 ? '✓' : '✗';
+            $summary[] = sprintf('%s %s:%d', $status, ucfirst($entity), $message['status']);
+
             if ($message['status'] !== 200) {
                 $hasError = true;
             }
         }
+
         if (!$hasError) {
             $this->set_async_processing_state($id, 'completed');
-            $this->log_debug(__METHOD__ . ' completed > ' . $id);
+            $this->log_debug(sprintf(
+                '[Complete] Request #%d | %s',
+                $id,
+                implode(' | ', $summary)
+            ));
         } else {
             $this->set_async_processing_state($id, 'failed');
-            $this->log_debug(__METHOD__ . ' failed > ' . $id);
+            $this->log_debug(sprintf(
+                '[Failed] Request #%d | %s',
+                $id,
+                implode(' | ', $summary)
+            ));
         }
     }
 

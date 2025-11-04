@@ -204,7 +204,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
     {
         //Silence is golden
     }
-    public function get_mapped_fields($formId)
+    public function get_mapped_fields($formId, $entry_id = null)
     {
         global $wpdb;
         $form_filter = is_numeric($formId) ? $wpdb->prepare('AND form_id=%d', absint($formId)) : '';
@@ -232,7 +232,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $this->log_debug('Mapped field are ' . var_export($mapping, true));
         return $mapping;
     }
-    public function process_mapped_fields($mapping, $inputs)
+    public function process_mapped_fields($mapping, $inputs, $entry_id = null, $form_id = null)
     {
         $result = [];
         foreach ($mapping as $entity => $fields) {
@@ -291,12 +291,30 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $results = $wpdb->get_results($statement, ARRAY_A);
         $this->log_debug(__METHOD__ . ' processing > ' .  var_export($results, true));
         foreach ($results as $result) {
+            $entry_id = isset($result['entry_id']) ? $result['entry_id'] : null;
+            $form_id = isset($result['form_id']) ? $result['form_id'] : null;
+
+            // Determine failure reason
+            $failure_reason = 'Unknown error';
+            if ($result['accounts_call_status'] != 200) {
+                $failure_reason = "Accounts API returned {$result['accounts_call_status']}";
+            } elseif ($result['opportunities_call_status'] != 200) {
+                $failure_reason = "Opportunities API returned {$result['opportunities_call_status']}";
+            }
+
+            // Add retry note
+            $this->add_momentus_note(
+                $entry_id,
+                "Retry Attempt Started\n\nRetrying failed request (ID: {$result['id']})\nPrevious failure: {$failure_reason}\nLast attempt: {$result['last_attempt_at']}",
+                'WARNING'
+            );
+
             $this->set_async_processing_state($result['id'], 'retrying');
             $requests = json_decode($result['body'], true);
             if ($result['accounts_call_status'] != 200) {
                 $messages = [];
-                $this->send($requests, $messages);
-                $this->process_messages_sent($result['id'], $messages);
+                $this->send($requests, $messages, $entry_id, $form_id);
+                $this->process_messages_sent($result['id'], $messages, $entry_id, $form_id);
             } else {
                 //Process Opportunities
                 $accountsResponse = json_decode($result['accounts_response'], true);
@@ -304,15 +322,41 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 if (isset($accountsResponse['AccountCode']) && isset($postBody['opportunities'])) {
                     $opportunitiesBody = $postBody['opportunities'];
                     $opportunitiesBody['AccountCode'] = $accountsResponse['AccountCode'];
+
+                    $settings = $this->get_saved_plugin_settings();
+                    $api_url = isset($settings['api_url']) ? $settings['api_url'] : 'Not configured';
+
+                    // Add note before retry
+                    $this->add_momentus_note(
+                        $entry_id,
+                        "Retrying Opportunities API Call\n\nEndpoint: POST {$api_url}/Opportunities\nAccountCode: {$accountsResponse['AccountCode']}\n\nAttempting to retry Opportunities creation...",
+                        'INFO'
+                    );
+
+                    $start_time = microtime(true);
                     $response = $this->send_post('Opportunities', $opportunitiesBody);
+                    $duration = round(microtime(true) - $start_time, 2);
+
                     $this->set_async_processing_column($result['id'], 'opportunities_call_status', $response['response']['code']);
                     $this->set_async_processing_column($result['id'], 'opportunities_response', $response['body']);
                     if ($response['response']['code'] === 200) {
                         $this->set_async_processing_state($result['id'], 'complete');
                         $this->log_debug(__METHOD__ . ' completed > ' .  var_export($result, true));
+
+                        $this->add_momentus_note(
+                            $entry_id,
+                            "Retry Succeeded - Opportunities API\n\nHTTP Status: 200 OK\nResponse Time: {$duration}s\n\nOpportunity created successfully after retry",
+                            'SUCCESS'
+                        );
                     } else {
                         $this->set_async_processing_state($result['id'], 'failed');
                         $this->log_debug(__METHOD__ . ' failed > ' .  var_export($result, true));
+
+                        $this->add_momentus_note(
+                            $entry_id,
+                            "Retry Failed - Opportunities API\n\nHTTP Status: {$response['response']['code']}\nResponse Time: {$duration}s\n\nError Response:\n{$response['body']}\n\nThe request will be retried again later.",
+                            'ERROR'
+                        );
                     }
                 }
             }
@@ -327,26 +371,65 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $results = $wpdb->get_results($statement, ARRAY_A);
         $this->log_debug(__METHOD__ . ' processing > ' .  var_export($results, true));
         foreach ($results as $result) {
+            $entry_id = isset($result['entry_id']) ? $result['entry_id'] : null;
+            $form_id = isset($result['form_id']) ? $result['form_id'] : null;
+
+            // Add note that CRON has picked up the request
+            $this->add_momentus_note(
+                $entry_id,
+                "Async Request Processing Started\n\nCRON job picked up queued request\nDatabase Record ID: {$result['id']}\nStatus: new → processing",
+                'INFO'
+            );
+
             $this->set_async_processing_state($result['id']);
             $requests = json_decode($result['body'], true);
             $messages = [];
-            $this->send($requests, $messages);
-            $this->process_messages_sent($result['id'], $messages);
+            $this->send($requests, $messages, $entry_id, $form_id);
+            $this->process_messages_sent($result['id'], $messages, $entry_id, $form_id);
         }
     }
-    public function process_request($requests)
+    public function process_request($requests, $entry_id = null, $form_id = null)
     {
         $settings = $this->get_saved_plugin_settings();
         if (isset($requests['accounts']) && isset($requests['opportunities'])) {
+            $accounts_count = count($requests['accounts']);
+            $opportunities_count = count($requests['opportunities']);
+
             if ($settings['async'] == 1) {
+                // Async mode
+                $this->add_momentus_note(
+                    $entry_id,
+                    "Submission Queued for Momentous\n\nEntry ID: {$entry_id} | Form ID: {$form_id}\nMode: ASYNC (will be processed by CRON)\n\nField Mappings:\n• Accounts: {$accounts_count} fields mapped\n• Opportunities: {$opportunities_count} fields mapped\n\nStatus: Queued - will process within 1 minute",
+                    'INFO'
+                );
+
                 $timeId = time();
                 $this->save_requests(array(
                     'body'  => json_encode($requests),
+                    'entry_id' => $entry_id,
+                    'form_id' => $form_id,
                     'status' => 'new',
                     'created_at' => date('Y-m-d h:i:s', time())
                 ));
+
+                // Get the inserted ID
+                global $wpdb;
+                $inserted_id = $wpdb->insert_id;
+
+                $this->add_momentus_note(
+                    $entry_id,
+                    "Request Queued Successfully\n\nDatabase Record ID: {$inserted_id}\nThe request will be processed by the CRON job within 1 minute.",
+                    'INFO'
+                );
             } else {
-                $this->send($requests);
+                // Sync mode
+                $this->add_momentus_note(
+                    $entry_id,
+                    "Submission Received - Processing Immediately\n\nEntry ID: {$entry_id} | Form ID: {$form_id}\nMode: SYNC (immediate processing)\n\nField Mappings:\n• Accounts: {$accounts_count} fields mapped\n• Opportunities: {$opportunities_count} fields mapped",
+                    'INFO'
+                );
+
+                $this->send($requests, null, $entry_id, $form_id);
             }
         }
     }
@@ -359,13 +442,26 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         return $api->request($endpoint, $data, 'POST');
     }
 
-    public function send($requests, &$messages = null)
+    public function send($requests, &$messages = null, $entry_id = null, $form_id = null)
     {
         require_once 'includes/class-gf-momentous-api.php';
         $settings = $this->get_saved_plugin_settings();
         $api = new GF_Momentous_API($settings);
         $wasSuccessful = false;
+
+        $api_url = isset($settings['api_url']) ? $settings['api_url'] : 'Not configured';
+
+        // Add note before Accounts API call
+        $this->add_momentus_note(
+            $entry_id,
+            "Sending Data to Momentous API - Accounts\n\nEndpoint: POST {$api_url}/Accounts\nAuthentication: JWT token generated successfully\n\nRequest Data Summary:\n• Organization: " . (isset($requests['accounts']['Organization']) ? $requests['accounts']['Organization'] : 'N/A') . "\n• Class: " . (isset($requests['accounts']['Class']) ? $requests['accounts']['Class'] : 'N/A') . "\n• FirstName: " . (isset($requests['accounts']['FirstName']) ? $requests['accounts']['FirstName'] : 'N/A'),
+            'INFO'
+        );
+
+        $start_time = microtime(true);
         $response = $api->request('Accounts', $requests['accounts'], 'POST');
+        $accounts_duration = round(microtime(true) - $start_time, 2);
+
         if (isset($response['response']) && isset($response['response']['code'])) {
             if ($response['response']['code'] == 200) {
                 $resp = json_decode($response['body'], true);
@@ -376,10 +472,31 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                     ];
                 }
                 $this->log_debug('ACCOUNTS API ENDPOINT SUCCESS ' . $response['body']);
+
+                $account_code = isset($resp['AccountCode']) ? $resp['AccountCode'] : 'N/A';
+                $organization = isset($resp['Organization']) ? $resp['Organization'] : 'N/A';
+
+                // Add success note for Accounts API
+                $this->add_momentus_note(
+                    $entry_id,
+                    "Accounts API Call Succeeded\n\nEndpoint: POST {$api_url}/Accounts\nHTTP Status: 200 OK\nResponse Time: {$accounts_duration}s\n\nResponse Summary:\n• AccountCode: {$account_code}\n• Organization: {$organization}\n\nProceeding to create Opportunity with this AccountCode...",
+                    'SUCCESS'
+                );
+
                 if (isset($resp['AccountCode'])) {
                     $opportunityBody = $requests['opportunities'];
                     $opportunityBody['Account'] = $resp['AccountCode'];
+
+                    // Add note before Opportunities API call
+                    $this->add_momentus_note(
+                        $entry_id,
+                        "Sending Data to Momentous API - Opportunities\n\nEndpoint: POST {$api_url}/Opportunities\nAccountCode: {$resp['AccountCode']}\n\nRequest includes AccountCode from Accounts response",
+                        'INFO'
+                    );
+
+                    $start_time = microtime(true);
                     $oppResponse =  $api->request('Opportunities', $opportunityBody, 'POST');
+                    $opp_duration = round(microtime(true) - $start_time, 2);
 
                     if ($messages !== null) {
                         $messages['opportunities'] = [
@@ -390,8 +507,23 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                     if (isset($oppResponse['response']) && isset($oppResponse['response']['code'])) {
                         if ($oppResponse['response']['code'] == 200) {
                             $this->log_debug("OPPORTUNITIES API ENDPOINT SUCCESS" . $oppResponse['body']);
+
+                            // Add success note for Opportunities API
+                            $this->add_momentus_note(
+                                $entry_id,
+                                "Opportunities API Call Succeeded\n\nEndpoint: POST {$api_url}/Opportunities\nHTTP Status: 200 OK\nResponse Time: {$opp_duration}s\n\nOpportunity created successfully with AccountCode: {$resp['AccountCode']}",
+                                'SUCCESS'
+                            );
                         } else {
                             $this->log_debug('OPPORTUNITIES API ENDPOINT ERROR CODE:  ' .  $oppResponse['response']['code'] . ' ' . $oppResponse['response']['message']);
+
+                            // Add error note for Opportunities API
+                            $error_body = $oppResponse['body'];
+                            $this->add_momentus_note(
+                                $entry_id,
+                                "Opportunities API Call Failed\n\nEndpoint: POST {$api_url}/Opportunities\nHTTP Status: {$oppResponse['response']['code']} {$oppResponse['response']['message']}\n\nError Response:\n{$error_body}\n\nRequest included AccountCode: {$resp['AccountCode']}",
+                                'ERROR'
+                            );
                         }
                     }
                 }
@@ -403,26 +535,79 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                     ];
                 }
                 $this->log_debug('ACCOUNTS API ENDPOINT ERROR CODE:  ' .  $response['response']['code'] . ' ' . $response['response']['message']);
+
+                // Add error note for Accounts API
+                $error_body = $response['body'];
+                $this->add_momentus_note(
+                    $entry_id,
+                    "Accounts API Call Failed\n\nEndpoint: POST {$api_url}/Accounts\nHTTP Status: {$response['response']['code']} {$response['response']['message']}\nResponse Time: {$accounts_duration}s\n\nError Response:\n{$error_body}",
+                    'ERROR'
+                );
             }
         }
     }
 
-    private function process_messages_sent($id, $messages)
+    private function process_messages_sent($id, $messages, $entry_id = null, $form_id = null)
     {
         $hasError = false;
+        $accounts_status = 'N/A';
+        $opportunities_status = 'N/A';
+        $accounts_code = 'N/A';
+
         foreach ($messages as $entity => $message) {
             $this->set_async_processing_column($id, $entity . '_call_status', $message['status']);
             $this->set_async_processing_column($id, $entity . '_response', $message['body']);
+
+            if ($entity == 'accounts') {
+                $accounts_status = $message['status'];
+                if ($message['status'] == 200) {
+                    $resp = json_decode($message['body'], true);
+                    if (isset($resp['AccountCode'])) {
+                        $accounts_code = $resp['AccountCode'];
+                    }
+                }
+            } elseif ($entity == 'opportunities') {
+                $opportunities_status = $message['status'];
+            }
+
             if ($message['status'] !== 200) {
                 $hasError = true;
             }
         }
+
+        $completion_time = current_time('Y-m-d H:i:s');
+
         if (!$hasError) {
             $this->set_async_processing_state($id, 'completed');
             $this->log_debug(__METHOD__ . ' completed > ' . $id);
+
+            // Add final success note
+            $this->add_momentus_note(
+                $entry_id,
+                "Momentous Sync Completed Successfully\n\nFinal Status: COMPLETED\n• Accounts API: SUCCESS (200) - AccountCode: {$accounts_code}\n• Opportunities API: SUCCESS (200)\n\nDatabase Record ID: {$id}\nCompleted: {$completion_time}",
+                'SUCCESS'
+            );
         } else {
             $this->set_async_processing_state($id, 'failed');
             $this->log_debug(__METHOD__ . ' failed > ' . $id);
+
+            // Determine which API failed
+            $accounts_mark = ($accounts_status == 200) ? 'SUCCESS' : 'FAILED';
+            $opportunities_mark = ($opportunities_status == 200) ? 'SUCCESS' : 'FAILED';
+
+            // Add final error note
+            $error_details = '';
+            if ($accounts_status != 200) {
+                $error_details = "\n\nError Details:\nAccounts API returned HTTP {$accounts_status}";
+            } elseif ($opportunities_status != 200) {
+                $error_details = "\n\nError Details:\nOpportunities API returned HTTP {$opportunities_status}";
+            }
+
+            $this->add_momentus_note(
+                $entry_id,
+                "Momentous Sync Failed\n\nFinal Status: FAILED\n• Accounts API: {$accounts_mark} ({$accounts_status})\n• Opportunities API: {$opportunities_mark} ({$opportunities_status}){$error_details}\n\nDatabase Record ID: {$id}\nCompleted: {$completion_time}\n\nThis request will be retried automatically.",
+                'ERROR'
+            );
         }
     }
 
@@ -467,6 +652,33 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $table_name = $wpdb->prefix . 'momentous_requests';
         $wpdb->insert($table_name, $data);
     }
+
+    /**
+     * Add a note to a Gravity Forms entry
+     * @param int $entry_id The entry ID
+     * @param string $message The note message
+     * @param string $type The note type: INFO, SUCCESS, ERROR, WARNING
+     */
+    private function add_momentus_note($entry_id, $message, $type = 'INFO')
+    {
+        if (empty($entry_id)) {
+            return;
+        }
+
+        $timestamp = current_time('Y-m-d H:i:s');
+        $formatted_message = "[{$type}] {$message}\n\nTimestamp: {$timestamp}";
+
+        GFAPI::add_note(
+            $entry_id,
+            0, // user_id (0 = system)
+            'Momentous Add-On',
+            $formatted_message
+        );
+
+        // Also log to debug log
+        $this->log_debug("[Entry {$entry_id}] [{$type}] {$message}");
+    }
+
     private function get_saved_plugin_settings()
     {
         $prefix  = $this->is_gravityforms_supported('2.5') ? '_gform_setting' : '_gaddon_setting';

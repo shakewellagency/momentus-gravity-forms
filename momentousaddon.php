@@ -14,6 +14,7 @@ add_action('gform_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'load' ),
 add_action('gform_after_submission', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'processSubmission' ), 5);
 add_action('momentous_async_send_cron', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'do_async_send' ));
 add_action('momentous_process_failed_requests_cron', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'process_async_failed_requests' ));
+add_action('plugins_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'check_version_upgrade' ));
 
 // Register watchdog CRON and its schedule
 add_action('init', function () {
@@ -63,6 +64,8 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         $sql = "CREATE TABLE " . $table_name . " (
             id         int auto_increment,
             body        LONGTEXT    not null,
+            entry_id    int         null,
+            form_id     int         null,
             accounts_call_status      varchar(10) null,
             opportunities_call_status varchar(10) null,
             status       varchar(10) not null,
@@ -76,6 +79,36 @@ class GF_Momentous_Feed_AddOn_Bootstrap
                 primary key (id)
         ) $charset_collate;";
         dbDelta($sql);
+
+        // Run migration for existing installations
+        self::migrate_table();
+    }
+
+    public static function check_version_upgrade()
+    {
+        $saved_version = get_option('gf_momentous_version', '0');
+        if (version_compare($saved_version, GF_MOMENTOUS_FEED_ADDON_VERSION, '<')) {
+            self::migrate_table();
+            update_option('gf_momentous_version', GF_MOMENTOUS_FEED_ADDON_VERSION);
+        }
+    }
+
+    public static function migrate_table()
+    {
+        global $wpdb;
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
+
+        // Check if entry_id column exists
+        $column = $wpdb->get_results("SHOW COLUMNS FROM `{$table_name}` LIKE 'entry_id'");
+        if (empty($column)) {
+            $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `entry_id` INT NULL AFTER `body`");
+        }
+
+        // Check if form_id column exists
+        $column = $wpdb->get_results("SHOW COLUMNS FROM `{$table_name}` LIKE 'form_id'");
+        if (empty($column)) {
+            $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `form_id` INT NULL AFTER `entry_id`");
+        }
     }
 
     public static function delete_table()
@@ -146,12 +179,15 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         return $schedules;
     }
 
-    public static function processSubmission($form)
+    public static function processSubmission($entry, $form)
     {
         $object = gf_momentous_feed_addon();
-        $mapping = $object->get_mapped_fields($form['form_id']);
-        $values = $object->process_mapped_fields($mapping, $form);
-        $object->process_request($values);
+        $entry_id = isset($entry['id']) ? $entry['id'] : null;
+        $form_id = isset($form['id']) ? $form['id'] : null;
+
+        $mapping = $object->get_mapped_fields($form_id, $entry_id);
+        $values = $object->process_mapped_fields($mapping, $form, $entry_id, $form_id);
+        $object->process_request($values, $entry_id, $form_id);
     }
 }
 

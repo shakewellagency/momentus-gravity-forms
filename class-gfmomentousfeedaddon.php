@@ -665,15 +665,20 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             return;
         }
 
-        $timestamp = current_time('Y-m-d H:i:s');
-        $formatted_message = "[{$type}] {$message}\n\nTimestamp: {$timestamp}";
+        try {
+            $timestamp = current_time('Y-m-d H:i:s');
+            $formatted_message = "[{$type}] {$message}\n\nTimestamp: {$timestamp}";
 
-        GFAPI::add_note(
-            $entry_id,
-            0, // user_id (0 = system)
-            'Momentous Add-On',
-            $formatted_message
-        );
+            GFAPI::add_note(
+                $entry_id,
+                0, // user_id (0 = system)
+                'Momentous Add-On',
+                $formatted_message
+            );
+        } catch (Exception $e) {
+            // Fail silently - don't break the sync
+            $this->log_debug("[Entry {$entry_id}] Failed to add note: {$e->getMessage()}");
+        }
 
         // Also log to debug log
         $this->log_debug("[Entry {$entry_id}] [{$type}] {$message}");

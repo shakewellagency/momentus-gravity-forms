@@ -293,6 +293,40 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         foreach ($results as $result) {
             $entry_id = isset($result['entry_id']) ? $result['entry_id'] : null;
             $form_id = isset($result['form_id']) ? $result['form_id'] : null;
+            $retry_count = isset($result['retry_count']) ? intval($result['retry_count']) : 0;
+
+            // Check if max retries exceeded (5 attempts)
+            if ($retry_count >= 5) {
+                $this->set_async_processing_state($result['id'], 'abandoned');
+
+                // Determine failure reason
+                $failure_reason = 'Unknown error';
+                $error_details = '';
+                if ($result['accounts_call_status'] != 200) {
+                    $failure_reason = "Accounts API returned {$result['accounts_call_status']}";
+                    $error_details = $result['accounts_response'];
+                } elseif ($result['opportunities_call_status'] != 200) {
+                    $failure_reason = "Opportunities API returned {$result['opportunities_call_status']}";
+                    $error_details = $result['opportunities_response'];
+                }
+
+                // Add abandoned note to entry
+                $this->add_momentus_note(
+                    $entry_id,
+                    "Request Abandoned - Max Retries Exceeded\n\nDatabase Record ID: {$result['id']}\nTotal Attempts: {$retry_count}\nFinal Failure Reason: {$failure_reason}\n\nThis request has been abandoned after 5 failed attempts. Manual intervention required.\n\nLast Error Response:\n{$error_details}",
+                    'ERROR'
+                );
+
+                // Send admin notification
+                $this->send_abandoned_notification($result, $failure_reason, $error_details, $entry_id, $form_id);
+
+                $this->log_debug(__METHOD__ . ' abandoned > Request ID: ' . $result['id'] . ' after ' . $retry_count . ' attempts');
+                continue;
+            }
+
+            // Increment retry count
+            $retry_count++;
+            $this->increment_retry_count($result['id']);
 
             // Determine failure reason
             $failure_reason = 'Unknown error';
@@ -305,7 +339,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             // Add retry note
             $this->add_momentus_note(
                 $entry_id,
-                "Retry Attempt Started\n\nRetrying failed request (ID: {$result['id']})\nPrevious failure: {$failure_reason}\nLast attempt: {$result['last_attempt_at']}",
+                "Retry Attempt Started (Attempt {$retry_count} of 5)\n\nRetrying failed request (ID: {$result['id']})\nPrevious failure: {$failure_reason}\nLast attempt: {$result['last_attempt_at']}",
                 'WARNING'
             );
 
@@ -682,6 +716,72 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
 
         // Also log to debug log
         $this->log_debug("[Entry {$entry_id}] [{$type}] {$message}");
+    }
+
+    /**
+     * Increment the retry count for a request
+     * @param int $id The request ID
+     */
+    private function increment_retry_count($id)
+    {
+        global $wpdb;
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
+        $wpdb->query($wpdb->prepare(
+            "UPDATE {$table_name} SET retry_count = retry_count + 1 WHERE id = %d",
+            $id
+        ));
+    }
+
+    /**
+     * Send admin notification when a request is abandoned
+     * @param array $request The request record
+     * @param string $failure_reason The failure reason
+     * @param string $error_details The error details
+     * @param int $entry_id The entry ID
+     * @param int $form_id The form ID
+     */
+    private function send_abandoned_notification($request, $failure_reason, $error_details, $entry_id, $form_id)
+    {
+        $settings = $this->get_plugin_settings();
+        $to = !empty($settings['email_cron_failure_alerts']) ? $settings['email_cron_failure_alerts'] : get_option('admin_email');
+
+        $subject = 'Momentous Request Abandoned - Manual Intervention Required';
+
+        $entry_url = admin_url("admin.php?page=gf_entries&view=entry&id={$form_id}&lid={$entry_id}");
+        $created_at = isset($request['created_at']) ? $request['created_at'] : 'Unknown';
+        $retry_count = isset($request['retry_count']) ? $request['retry_count'] : 0;
+
+        $message = "<p><strong>Momentous Request Abandoned</strong></p>";
+        $message .= "<p>A Momentous sync request has been abandoned after {$retry_count} failed attempts.</p>";
+        $message .= "<h3>Request Details:</h3>";
+        $message .= "<ul>";
+        $message .= "<li><strong>Database Record ID:</strong> {$request['id']}</li>";
+        $message .= "<li><strong>Entry ID:</strong> <a href='{$entry_url}'>{$entry_id}</a></li>";
+        $message .= "<li><strong>Form ID:</strong> {$form_id}</li>";
+        $message .= "<li><strong>Created:</strong> {$created_at}</li>";
+        $message .= "<li><strong>Total Retry Attempts:</strong> {$retry_count}</li>";
+        $message .= "</ul>";
+        $message .= "<h3>Failure Information:</h3>";
+        $message .= "<p><strong>Reason:</strong> {$failure_reason}</p>";
+
+        if (!empty($error_details)) {
+            $message .= "<h4>Error Response:</h4>";
+            $message .= "<pre style='background: #f5f5f5; padding: 10px; border: 1px solid #ddd;'>" . esc_html($error_details) . "</pre>";
+        }
+
+        $message .= "<hr>";
+        $message .= "<p><strong>Action Required:</strong></p>";
+        $message .= "<ul>";
+        $message .= "<li>Review the error details above</li>";
+        $message .= "<li><a href='{$entry_url}'>View the Gravity Forms entry</a></li>";
+        $message .= "<li>Correct any data issues</li>";
+        $message .= "<li>Manually sync to Momentous if needed</li>";
+        $message .= "</ul>";
+        $message .= "<p><em>Time: " . current_time('Y-m-d H:i:s') . "</em></p>";
+
+        wp_mail($to, $subject, $message, ['Content-Type: text/html']);
+
+        $this->log_debug("Abandoned notification sent to {$to} for request ID: {$request['id']}");
     }
 
     private function get_saved_plugin_settings()

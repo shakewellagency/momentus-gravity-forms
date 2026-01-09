@@ -3,12 +3,12 @@
 Plugin Name: Gravity Forms Momentous Feed Add-On
 Plugin URI: https://www.shakewell.agency/
 Description: An add-on for Momentous
-Version: 1.8
+Version: 1.9
 Author: Shakewell
 Author URI: https://www.shakewell.agency/
 */
 
-define('GF_MOMENTOUS_FEED_ADDON_VERSION', '1.8');
+define('GF_MOMENTOUS_FEED_ADDON_VERSION', '1.9');
 
 add_action('gform_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'load' ), 5);
 add_action('gform_after_submission', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'processSubmission' ), 5, 2);
@@ -71,6 +71,7 @@ class GF_Momentous_Feed_AddOn_Bootstrap
             status       varchar(10) not null,
             accounts_response    LONGTEXT    null,
             opportunities_response    LONGTEXT    null,
+            retry_count int         DEFAULT 0 not null,
             created_at  TIMESTAMP   not null,
             executed_at TIMESTAMP   null,
             last_attempt_at TIMESTAMP null,
@@ -108,6 +109,12 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         $column = $wpdb->get_results("SHOW COLUMNS FROM `{$table_name}` LIKE 'form_id'");
         if (empty($column)) {
             $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `form_id` INT NULL AFTER `entry_id`");
+        }
+
+        // Check if retry_count column exists
+        $column = $wpdb->get_results("SHOW COLUMNS FROM `{$table_name}` LIKE 'retry_count'");
+        if (empty($column)) {
+            $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `retry_count` INT DEFAULT 0 NOT NULL AFTER `opportunities_response`");
         }
     }
 

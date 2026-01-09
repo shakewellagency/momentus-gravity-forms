@@ -218,7 +218,7 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         $form_id = isset($form['id']) ? $form['id'] : null;
 
         $mapping = $object->get_mapped_fields($form_id, $entry_id);
-        $values = $object->process_mapped_fields($mapping, $form, $entry_id, $form_id);
+        $values = $object->process_mapped_fields($mapping, $entry, $entry_id, $form_id);
         $object->process_request($values, $entry_id, $form_id);
     }
 }

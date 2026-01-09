@@ -141,17 +141,6 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         if ($abandoned_count > 0) {
             error_log("Momentous Migration: Abandoned {$abandoned_count} old failed records (>7 days)");
         }
-
-        // Also clean up very old completed records (>90 days) to reduce database bloat
-        $deleted_count = $wpdb->query(
-            "DELETE FROM {$table_name}
-            WHERE status = 'completed'
-              AND completed_at < DATE_SUB(NOW(), INTERVAL 90 DAY)"
-        );
-
-        if ($deleted_count > 0) {
-            error_log("Momentous Migration: Deleted {$deleted_count} old completed records (>90 days)");
-        }
     }
 
     public static function delete_table()

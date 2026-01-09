@@ -115,6 +115,42 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         $column = $wpdb->get_results("SHOW COLUMNS FROM `{$table_name}` LIKE 'retry_count'");
         if (empty($column)) {
             $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `retry_count` INT DEFAULT 0 NOT NULL AFTER `opportunities_response`");
+
+            // After adding retry_count column, clean up old failed records
+            self::cleanup_old_failed_records();
+        }
+    }
+
+    /**
+     * Clean up old failed records during migration
+     * Abandons failed records older than 7 days to prevent retrying ancient requests
+     */
+    public static function cleanup_old_failed_records()
+    {
+        global $wpdb;
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
+
+        // Abandon failed records older than 7 days
+        $abandoned_count = $wpdb->query(
+            "UPDATE {$table_name}
+            SET status = 'abandoned', retry_count = 5
+            WHERE status = 'failed'
+              AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)"
+        );
+
+        if ($abandoned_count > 0) {
+            error_log("Momentous Migration: Abandoned {$abandoned_count} old failed records (>7 days)");
+        }
+
+        // Also clean up very old completed records (>90 days) to reduce database bloat
+        $deleted_count = $wpdb->query(
+            "DELETE FROM {$table_name}
+            WHERE status = 'completed'
+              AND completed_at < DATE_SUB(NOW(), INTERVAL 90 DAY)"
+        );
+
+        if ($deleted_count > 0) {
+            error_log("Momentous Migration: Deleted {$deleted_count} old completed records (>90 days)");
         }
     }
 

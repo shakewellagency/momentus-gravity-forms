@@ -11,7 +11,7 @@ Author URI: https://www.shakewell.agency/
 define('GF_MOMENTOUS_FEED_ADDON_VERSION', '1.8');
 
 add_action('gform_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'load' ), 5);
-add_action('gform_after_submission', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'processSubmission' ), 5);
+add_action('gform_after_submission', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'processSubmission' ), 5, 2);
 add_action('momentous_async_send_cron', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'do_async_send' ));
 add_action('momentous_process_failed_requests_cron', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'process_async_failed_requests' ));
 add_action('plugins_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'check_version_upgrade' ));

@@ -387,7 +387,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                         $this->set_async_processing_state($result['id'], 'failed');
                         $this->log_debug(__METHOD__ . ' failed > ' .  var_export($result, true));
 
-                        $next_retry = wp_date('Y-m-d H:i:s', current_time('timestamp') + 300);
+                        $next_retry = date('Y-m-d H:i:s', current_time('timestamp') + 300);
                         $this->add_momentus_note(
                             $entry_id,
                             "Retry Failed - Opportunities API\n\nHTTP Status: {$response['response']['code']}\nResponse Time: {$duration}s\n\nError Response:\n{$response['body']}\n\nNext retry scheduled: {$next_retry} (in 5 minutes)",
@@ -445,7 +445,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                     'entry_id' => $entry_id,
                     'form_id' => $form_id,
                     'status' => 'new',
-                    'created_at' => date('Y-m-d h:i:s', time())
+                    'created_at' => current_time('Y-m-d H:i:s')
                 ));
 
                 // Get the inserted ID
@@ -639,7 +639,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 $error_details = "\n\nError Details:\nOpportunities API returned HTTP {$opportunities_status}";
             }
 
-            $next_retry = wp_date('Y-m-d H:i:s', current_time('timestamp') + 300);
+            $next_retry = date('Y-m-d H:i:s', current_time('timestamp') + 300);
             $this->add_momentus_note(
                 $entry_id,
                 "Momentous Sync Failed\n\nFinal Status: FAILED\n• Accounts API: {$accounts_mark} ({$accounts_status})\n• Opportunities API: {$opportunities_mark} ({$opportunities_status}){$error_details}\n\nDatabase Record ID: {$id}\nCompleted: {$completion_time}\n\nNext retry scheduled: {$next_retry} (in 5 minutes)",
@@ -664,7 +664,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         if ($state == 'completed') {
             $wpdb->update($table_name, [
                 'status' => $state,
-                'completed_at' => date('Y-m-d h:i:s', time())
+                'completed_at' => current_time('Y-m-d H:i:s')
             ], ['id' => $id]);
         } else if ($state == 'failed') {
             $wpdb->update($table_name, [
@@ -673,12 +673,12 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         } else if ($state == 'retrying') {
             $wpdb->update($table_name, [
                 'status' => $state,
-                'last_attempt_at' => date('Y-m-d h:i:s', time())
+                'last_attempt_at' => current_time('Y-m-d H:i:s')
             ], ['id' => $id]);
         } else {
             $wpdb->update($table_name, [
                 'status' => $state,
-                'executed_at' => date('Y-m-d h:i:s', time())
+                'executed_at' => current_time('Y-m-d H:i:s')
             ], ['id' => $id]);
         }
     }

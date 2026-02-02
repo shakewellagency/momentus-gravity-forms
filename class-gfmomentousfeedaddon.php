@@ -337,9 +337,10 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
             }
 
             // Add retry note
+            $current_time = current_time('Y-m-d H:i:s');
             $this->add_momentus_note(
                 $entry_id,
-                "Retry Attempt Started (Attempt {$retry_count} of 5)\n\nRetrying failed request (ID: {$result['id']})\nPrevious failure: {$failure_reason}\nLast attempt: {$result['last_attempt_at']}",
+                "Retry Attempt Started (Attempt {$retry_count} of 5)\n\nRetrying failed request (ID: {$result['id']})\nPrevious failure: {$failure_reason}\nLast attempt: {$result['last_attempt_at']}\nCurrent attempt: {$current_time}\nRetry interval: 5 minutes",
                 'WARNING'
             );
 
@@ -386,9 +387,10 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                         $this->set_async_processing_state($result['id'], 'failed');
                         $this->log_debug(__METHOD__ . ' failed > ' .  var_export($result, true));
 
+                        $next_retry = date('Y-m-d H:i:s', strtotime('+5 minutes'));
                         $this->add_momentus_note(
                             $entry_id,
-                            "Retry Failed - Opportunities API\n\nHTTP Status: {$response['response']['code']}\nResponse Time: {$duration}s\n\nError Response:\n{$response['body']}\n\nThe request will be retried again later.",
+                            "Retry Failed - Opportunities API\n\nHTTP Status: {$response['response']['code']}\nResponse Time: {$duration}s\n\nError Response:\n{$response['body']}\n\nNext retry scheduled: {$next_retry} (in 5 minutes)",
                             'ERROR'
                         );
                     }
@@ -637,9 +639,10 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 $error_details = "\n\nError Details:\nOpportunities API returned HTTP {$opportunities_status}";
             }
 
+            $next_retry = date('Y-m-d H:i:s', strtotime('+5 minutes'));
             $this->add_momentus_note(
                 $entry_id,
-                "Momentous Sync Failed\n\nFinal Status: FAILED\n• Accounts API: {$accounts_mark} ({$accounts_status})\n• Opportunities API: {$opportunities_mark} ({$opportunities_status}){$error_details}\n\nDatabase Record ID: {$id}\nCompleted: {$completion_time}\n\nThis request will be retried automatically.",
+                "Momentous Sync Failed\n\nFinal Status: FAILED\n• Accounts API: {$accounts_mark} ({$accounts_status})\n• Opportunities API: {$opportunities_mark} ({$opportunities_status}){$error_details}\n\nDatabase Record ID: {$id}\nCompleted: {$completion_time}\n\nNext retry scheduled: {$next_retry} (in 5 minutes)",
                 'ERROR'
             );
         }

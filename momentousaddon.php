@@ -21,6 +21,14 @@ add_action('init', function () {
     if (!wp_next_scheduled('momentous_async_send_cron')) {
         wp_schedule_event(time(), 'every_one_minute', 'momentous_async_send_cron');
     }
+
+    // Migration: Clear old 2-minute schedule and re-register with 5-minute interval
+    $failed_cron_migrated = get_option('momentous_failed_cron_migrated_5min', false);
+    if (!$failed_cron_migrated) {
+        wp_clear_scheduled_hook('momentous_process_failed_requests_cron');
+        update_option('momentous_failed_cron_migrated_5min', true);
+    }
+
     if (!wp_next_scheduled('momentous_process_failed_requests_cron')) {
         wp_schedule_event(time(), 'every_five_minutes', 'momentous_process_failed_requests_cron');
     }

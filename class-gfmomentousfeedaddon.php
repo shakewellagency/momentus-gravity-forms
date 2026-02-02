@@ -387,7 +387,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                         $this->set_async_processing_state($result['id'], 'failed');
                         $this->log_debug(__METHOD__ . ' failed > ' .  var_export($result, true));
 
-                        $next_retry = date('Y-m-d H:i:s', strtotime('+5 minutes'));
+                        $next_retry = wp_date('Y-m-d H:i:s', current_time('timestamp') + 300);
                         $this->add_momentus_note(
                             $entry_id,
                             "Retry Failed - Opportunities API\n\nHTTP Status: {$response['response']['code']}\nResponse Time: {$duration}s\n\nError Response:\n{$response['body']}\n\nNext retry scheduled: {$next_retry} (in 5 minutes)",
@@ -639,7 +639,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 $error_details = "\n\nError Details:\nOpportunities API returned HTTP {$opportunities_status}";
             }
 
-            $next_retry = date('Y-m-d H:i:s', strtotime('+5 minutes'));
+            $next_retry = wp_date('Y-m-d H:i:s', current_time('timestamp') + 300);
             $this->add_momentus_note(
                 $entry_id,
                 "Momentous Sync Failed\n\nFinal Status: FAILED\n• Accounts API: {$accounts_mark} ({$accounts_status})\n• Opportunities API: {$opportunities_mark} ({$opportunities_status}){$error_details}\n\nDatabase Record ID: {$id}\nCompleted: {$completion_time}\n\nNext retry scheduled: {$next_retry} (in 5 minutes)",

@@ -21,8 +21,16 @@ add_action('init', function () {
     if (!wp_next_scheduled('momentous_async_send_cron')) {
         wp_schedule_event(time(), 'every_one_minute', 'momentous_async_send_cron');
     }
+
+    // Migration: Clear old 2-minute schedule and re-register with 5-minute interval
+    $failed_cron_migrated = get_option('momentous_failed_cron_migrated_5min', false);
+    if (!$failed_cron_migrated) {
+        wp_clear_scheduled_hook('momentous_process_failed_requests_cron');
+        update_option('momentous_failed_cron_migrated_5min', true);
+    }
+
     if (!wp_next_scheduled('momentous_process_failed_requests_cron')) {
-        wp_schedule_event(time(), 'every_two_minutes', 'momentous_process_failed_requests_cron');
+        wp_schedule_event(time(), 'every_five_minutes', 'momentous_process_failed_requests_cron');
     }
     if (!wp_next_scheduled('momentous_cron_watchdog')) {
         wp_schedule_event(time(), 'every_ten_minutes', 'momentous_cron_watchdog');
@@ -196,16 +204,16 @@ class GF_Momentous_Feed_AddOn_Bootstrap
     }
 
     public static function cron_schedule_filter() {
-        $schedules['every_two_minutes'] = [
-            'interval' => 120, // 180 seconds = 3 minutes
-            'display'  => __('Every minute'),
+        $schedules['every_five_minutes'] = [
+            'interval' => 300, // 300 seconds = 5 minutes
+            'display'  => __('Every 5 Minutes'),
         ];
         $schedules['every_one_minute'] = [
             'interval' => 60, // 60 seconds = 1 minute
             'display'  => __('Every minute'),
         ];
         $schedules['every_ten_minutes'] = [
-            'interval' => 600,
+            'interval' => 600, // 600 seconds = 10 minutes
             'display'  => __('Every 10 Minutes')
         ];
         return $schedules;

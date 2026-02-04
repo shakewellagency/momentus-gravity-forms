@@ -8,7 +8,7 @@ Author: Shakewell
 Author URI: https://www.shakewell.agency/
 */
 
-define('GF_MOMENTOUS_FEED_ADDON_VERSION', '1.9');
+define('GF_MOMENTOUS_FEED_ADDON_VERSION', '2.0');
 
 add_action('gform_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'load' ), 5);
 add_action('gform_after_submission', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'processSubmission' ), 5, 2);
@@ -30,7 +30,7 @@ add_action('init', function () {
     }
 
     if (!wp_next_scheduled('momentous_process_failed_requests_cron')) {
-        wp_schedule_event(time(), 'every_five_minutes', 'momentous_process_failed_requests_cron');
+        wp_schedule_event(time(), 'every_one_minute', 'momentous_process_failed_requests_cron'); // TODO: Change back to 'every_five_minutes' after testing
     }
     if (!wp_next_scheduled('momentous_cron_watchdog')) {
         wp_schedule_event(time(), 'every_ten_minutes', 'momentous_cron_watchdog');
@@ -126,6 +126,18 @@ class GF_Momentous_Feed_AddOn_Bootstrap
 
             // After adding retry_count column, clean up old failed records
             self::cleanup_old_failed_records();
+        }
+
+        // Check if manual_retry_count column exists (for manual resend tracking)
+        $column = $wpdb->get_results("SHOW COLUMNS FROM `{$table_name}` LIKE 'manual_retry_count'");
+        if (empty($column)) {
+            $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `manual_retry_count` INT DEFAULT 0 NOT NULL AFTER `retry_count`");
+        }
+
+        // Check if manual_notified_at column exists (for lead notification tracking)
+        $column = $wpdb->get_results("SHOW COLUMNS FROM `{$table_name}` LIKE 'manual_notified_at'");
+        if (empty($column)) {
+            $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `manual_notified_at` TIMESTAMP NULL AFTER `manual_retry_count`");
         }
     }
 

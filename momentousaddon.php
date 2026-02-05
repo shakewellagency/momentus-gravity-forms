@@ -22,15 +22,15 @@ add_action('init', function () {
         wp_schedule_event(time(), 'every_one_minute', 'momentous_async_send_cron');
     }
 
-    // Migration: Clear old 2-minute schedule and re-register with 5-minute interval
-    $failed_cron_migrated = get_option('momentous_failed_cron_migrated_5min', false);
+    // Migration: Clear old schedule and re-register with 5-minute interval
+    $failed_cron_migrated = get_option('momentous_failed_cron_migrated_5min_v2', false);
     if (!$failed_cron_migrated) {
         wp_clear_scheduled_hook('momentous_process_failed_requests_cron');
-        update_option('momentous_failed_cron_migrated_5min', true);
+        update_option('momentous_failed_cron_migrated_5min_v2', true);
     }
 
     if (!wp_next_scheduled('momentous_process_failed_requests_cron')) {
-        wp_schedule_event(time(), 'every_one_minute', 'momentous_process_failed_requests_cron'); // TODO: Change back to 'every_five_minutes' after testing
+        wp_schedule_event(time(), 'every_five_minutes', 'momentous_process_failed_requests_cron');
     }
     if (!wp_next_scheduled('momentous_cron_watchdog')) {
         wp_schedule_event(time(), 'every_ten_minutes', 'momentous_cron_watchdog');
@@ -177,7 +177,7 @@ class GF_Momentous_Feed_AddOn_Bootstrap
             wp_schedule_event(time(), 'every_one_minute', 'momentous_async_send_cron');
         }
         if (!wp_next_scheduled('momentous_process_failed_requests_cron')) {
-            wp_schedule_event(time(), 'every_two_minutes', 'momentous_process_failed_requests_cron');
+            wp_schedule_event(time(), 'every_five_minutes', 'momentous_process_failed_requests_cron');
         }
         if (!wp_next_scheduled('momentous_cron_watchdog')) {
             wp_schedule_event(time(), 'every_ten_minutes', 'momentous_cron_watchdog');
@@ -215,7 +215,7 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         $object->process_failed_async_requests();
     }
 
-    public static function cron_schedule_filter() {
+    public static function cron_schedule_filter($schedules) {
         $schedules['every_five_minutes'] = [
             'interval' => 300, // 300 seconds = 5 minutes
             'display'  => __('Every 5 Minutes'),
@@ -268,7 +268,7 @@ function momentous_check_cron_health()
     if (!empty($problems)) {
         $message = "<p><strong>Momentous CRON Failure Watchdog Alert</strong></p>";
         $message .= '<ul><li>' . implode('</li><li>', $problems) . '</li></ul>';
-        $message .= "<p>Time checked: " . current_time('mysql') . "</p>";
+        $message .= "<p>Time checked: " . current_time('Y-m-d H:i:s') . "</p>";
 
         $settings = gf_momentous_feed_addon()->get_plugin_settings();
         $to = !empty($settings['email_cron_failure_alerts']) ? $settings['email_cron_failure_alerts'] : get_option('admin_email');

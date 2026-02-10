@@ -20,6 +20,8 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
     const MOMENTOUS_ASYNC_SENDING_LABEL = 'Enable Asynchronous sending';
     const MOMENTOUS_FAILED_EMAIL_NOTIFICATION_LABEL = 'Email to receive CRON failure alerts';
     const MOMENTOUS_FAILED_EMAIL_NOTIFICATION_NAME = 'email_cron_failure_alerts';
+    const MOMENTOUS_LEAD_EMAILS_LABEL = 'Lead Notification Emails (comma-separated)';
+    const MOMENTOUS_LEAD_EMAILS_NAME = 'lead_notification_emails';
     const REQUEST_TABLE = 'momentous_requests';
 
 
@@ -42,7 +44,38 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 'option_label' => esc_html__('Subscribe contact to service x only when payment is received.', 'momentous'),
             )
         );
+
+        // Add metabox for abandoned entries on entry detail page
+        add_filter('gform_entry_detail_meta_boxes', array($this, 'add_abandoned_entry_metabox'), 10, 3);
+
+        // Register AJAX handlers for manual resend and lead notification
+        add_action('wp_ajax_momentous_manual_resend', array($this, 'ajax_manual_resend'));
+        add_action('wp_ajax_momentous_notify_leads', array($this, 'ajax_notify_leads'));
+
+        // Enqueue scripts for entry detail page
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_entry_detail_scripts'));
     }
+
+    /**
+     * Enqueue scripts for entry detail page
+     */
+    public function enqueue_entry_detail_scripts($hook)
+    {
+        if ($hook !== 'forms_page_gf_entries') {
+            return;
+        }
+        if (empty($_GET['view']) || $_GET['view'] !== 'entry') {
+            return;
+        }
+        wp_enqueue_script(
+            'momentous_entry_detail_js',
+            $this->get_base_url() . '/js/momentous-entry-detail.js',
+            array('jquery'),
+            $this->_version,
+            true
+        );
+    }
+
     public function scripts()
     {
         $scripts = [
@@ -122,6 +155,14 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                         'class' => 'medium',
                         'required' => true,
                         'feedback_callback' => array($this, 'plugin_settings_fields_feedback_callback'),
+                    ),
+                    array(
+                        'name' => self::MOMENTOUS_LEAD_EMAILS_NAME,
+                        'label' => esc_html__(self::MOMENTOUS_LEAD_EMAILS_LABEL, 'gravityforms-momentous'),
+                        'type' => 'text',
+                        'class' => 'large',
+                        'required' => false,
+                        'tooltip' => esc_html__('Comma-separated list of emails to receive manual entry notifications when automatic sync fails', 'gravityforms-momentous'),
                     ),
                 ),
             ),
@@ -372,6 +413,23 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                     $response = $this->send_post('Opportunities', $opportunitiesBody);
                     $duration = round(microtime(true) - $start_time, 2);
 
+                    // Handle WP_Error (connection timeout, DNS failure, etc.)
+                    if (is_wp_error($response)) {
+                        $error_message = $response->get_error_message();
+                        $this->set_async_processing_column($result['id'], 'opportunities_call_status', 0);
+                        $this->set_async_processing_column($result['id'], 'opportunities_response', 'WP_Error: ' . $error_message);
+                        $this->set_async_processing_state($result['id'], 'failed');
+                        $this->log_debug(__METHOD__ . ' WP_Error on Opportunities retry: ' . $error_message);
+
+                        $next_retry = wp_date('Y-m-d H:i:s', time() + 300);
+                        $this->add_momentus_note(
+                            $entry_id,
+                            "Retry Failed - Opportunities API (Connection Error)\n\nResponse Time: {$duration}s\n\nError: {$error_message}\n\nNext retry scheduled: {$next_retry} (in 5 minutes)",
+                            'ERROR'
+                        );
+                        continue;
+                    }
+
                     $this->set_async_processing_column($result['id'], 'opportunities_call_status', $response['response']['code']);
                     $this->set_async_processing_column($result['id'], 'opportunities_response', $response['body']);
                     if ($response['response']['code'] === 200) {
@@ -387,7 +445,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                         $this->set_async_processing_state($result['id'], 'failed');
                         $this->log_debug(__METHOD__ . ' failed > ' .  var_export($result, true));
 
-                        $next_retry = date('Y-m-d H:i:s', current_time('timestamp') + 300);
+                        $next_retry = wp_date('Y-m-d H:i:s', time() + 300);
                         $this->add_momentus_note(
                             $entry_id,
                             "Retry Failed - Opportunities API\n\nHTTP Status: {$response['response']['code']}\nResponse Time: {$duration}s\n\nError Response:\n{$response['body']}\n\nNext retry scheduled: {$next_retry} (in 5 minutes)",
@@ -498,6 +556,26 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
         $response = $api->request('Accounts', $requests['accounts'], 'POST');
         $accounts_duration = round(microtime(true) - $start_time, 2);
 
+        // Handle WP_Error (connection timeout, DNS failure, etc.)
+        if (is_wp_error($response)) {
+            $error_message = $response->get_error_message();
+            $this->log_debug('ACCOUNTS API WP_Error: ' . $error_message);
+
+            if ($messages !== null) {
+                $messages['accounts'] = [
+                    'status' => 0,
+                    'body' => 'WP_Error: ' . $error_message
+                ];
+            }
+
+            $this->add_momentus_note(
+                $entry_id,
+                "Accounts API Call Failed - Connection Error\n\nEndpoint: POST {$api_url}/Accounts\nResponse Time: {$accounts_duration}s\n\nError: {$error_message}",
+                'ERROR'
+            );
+            return;
+        }
+
         if (isset($response['response']) && isset($response['response']['code'])) {
             if ($response['response']['code'] == 200) {
                 $resp = json_decode($response['body'], true);
@@ -533,6 +611,26 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                     $start_time = microtime(true);
                     $oppResponse =  $api->request('Opportunities', $opportunityBody, 'POST');
                     $opp_duration = round(microtime(true) - $start_time, 2);
+
+                    // Handle WP_Error (connection timeout, DNS failure, etc.)
+                    if (is_wp_error($oppResponse)) {
+                        $error_message = $oppResponse->get_error_message();
+                        $this->log_debug('OPPORTUNITIES API WP_Error: ' . $error_message);
+
+                        if ($messages !== null) {
+                            $messages['opportunities'] = [
+                                'status' => 0,
+                                'body' => 'WP_Error: ' . $error_message
+                            ];
+                        }
+
+                        $this->add_momentus_note(
+                            $entry_id,
+                            "Opportunities API Call Failed - Connection Error\n\nEndpoint: POST {$api_url}/Opportunities\nResponse Time: {$opp_duration}s\n\nError: {$error_message}",
+                            'ERROR'
+                        );
+                        return;
+                    }
 
                     if ($messages !== null) {
                         $messages['opportunities'] = [
@@ -639,7 +737,7 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 $error_details = "\n\nError Details:\nOpportunities API returned HTTP {$opportunities_status}";
             }
 
-            $next_retry = date('Y-m-d H:i:s', current_time('timestamp') + 300);
+            $next_retry = wp_date('Y-m-d H:i:s', time() + 300);
             $this->add_momentus_note(
                 $entry_id,
                 "Momentous Sync Failed\n\nFinal Status: FAILED\n• Accounts API: {$accounts_mark} ({$accounts_status})\n• Opportunities API: {$opportunities_mark} ({$opportunities_status}){$error_details}\n\nDatabase Record ID: {$id}\nCompleted: {$completion_time}\n\nNext retry scheduled: {$next_retry} (in 5 minutes)",
@@ -832,6 +930,386 @@ class GFMomentousFeedAddOn extends GFFeedAddOn
                 return ucfirst($item['meta']['entity']);
             }
         }
+    }
+
+    // =========================================================================
+    // SYNC RECOVERY: Resend & Notify buttons for abandoned entries
+    // =========================================================================
+
+    /**
+     * Get abandoned request for an entry
+     * @param int $entry_id The Gravity Forms entry ID
+     * @return array|null The abandoned request record or null
+     */
+    public function get_abandoned_request_for_entry($entry_id)
+    {
+        if (empty($entry_id)) {
+            return null;
+        }
+        global $wpdb;
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
+
+        return $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT * FROM {$table_name} WHERE entry_id = %d AND status = 'abandoned' AND retry_count >= 5 ORDER BY id DESC LIMIT 1",
+                $entry_id
+            ),
+            ARRAY_A
+        );
+    }
+
+    /**
+     * Register metabox for abandoned entries (below Notes)
+     */
+    public function add_abandoned_entry_metabox($meta_boxes, $entry, $form)
+    {
+        $abandoned_request = $this->get_abandoned_request_for_entry(rgar($entry, 'id'));
+        if (!$abandoned_request) {
+            return $meta_boxes;
+        }
+
+        $meta_boxes['momentous_sync_recovery'] = array(
+            'title'    => esc_html__('Momentus Sync Recovery', 'gravityforms-momentous'),
+            'callback' => array($this, 'render_abandoned_entry_metabox'),
+            'context'  => 'normal',
+            'priority' => 'low',
+        );
+
+        return $meta_boxes;
+    }
+
+    /**
+     * Render the sync recovery metabox
+     */
+    public function render_abandoned_entry_metabox($args)
+    {
+        $entry = $args['entry'];
+        $entry_id = rgar($entry, 'id');
+
+        $abandoned_request = $this->get_abandoned_request_for_entry($entry_id);
+        if (!$abandoned_request) {
+            return;
+        }
+
+        $manual_retry_count = isset($abandoned_request['manual_retry_count']) ? intval($abandoned_request['manual_retry_count']) : 0;
+        $manual_notified_at = isset($abandoned_request['manual_notified_at']) ? $abandoned_request['manual_notified_at'] : null;
+        $max_manual_retries = 5;
+
+        // Determine error details
+        $error_summary = 'Unknown error';
+        $error_details = '';
+        if ($abandoned_request['accounts_call_status'] != 200) {
+            $error_summary = "Accounts API returned HTTP {$abandoned_request['accounts_call_status']}";
+            $error_details = $abandoned_request['accounts_response'];
+        } elseif ($abandoned_request['opportunities_call_status'] != 200) {
+            $error_summary = "Opportunities API returned HTTP {$abandoned_request['opportunities_call_status']}";
+            $error_details = $abandoned_request['opportunities_response'];
+        }
+
+        // Button states
+        $resend_disabled = $manual_retry_count >= $max_manual_retries;
+        $resend_text = $resend_disabled
+            ? __('Manual resend limit reached', 'gravityforms-momentous')
+            : __('Resend to Momentus', 'gravityforms-momentous');
+
+        $notify_disabled = !empty($manual_notified_at);
+        $notify_text = $notify_disabled
+            ? sprintf(__('Already notified on %s', 'gravityforms-momentous'), wp_date('Y-m-d H:i', strtotime($manual_notified_at)))
+            : __('Notify Leads for Manual Entry', 'gravityforms-momentous');
+
+        // Nonces
+        $resend_nonce = wp_create_nonce('momentous_manual_resend_' . $entry_id);
+        $notify_nonce = wp_create_nonce('momentous_notify_leads_' . $entry_id);
+
+        // Inline script data
+        $script_data = array(
+            'entry_id'     => $entry_id,
+            'request_id'   => $abandoned_request['id'],
+            'resend_nonce' => $resend_nonce,
+            'notify_nonce' => $notify_nonce,
+            'ajaxurl'      => admin_url('admin-ajax.php'),
+        );
+
+        ?>
+        <div class="momentous-sync-recovery-box">
+            <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin-bottom: 15px;">
+                <strong><?php esc_html_e('Warning:', 'gravityforms-momentous'); ?></strong>
+                <?php esc_html_e('This entry failed to sync after 5 automatic retry attempts.', 'gravityforms-momentous'); ?>
+            </div>
+
+            <div style="margin-bottom: 15px;">
+                <strong><?php esc_html_e('Last Error:', 'gravityforms-momentous'); ?></strong>
+                <div style="background: #f8f9fa; border: 1px solid #dee2e6; padding: 10px; margin-top: 5px; font-family: monospace; font-size: 12px; max-height: 150px; overflow-y: auto;">
+                    <div><strong><?php echo esc_html($error_summary); ?></strong></div>
+                    <?php if (!empty($error_details)): ?>
+                        <pre style="margin: 5px 0 0 0; white-space: pre-wrap; word-wrap: break-word;"><?php echo esc_html($error_details); ?></pre>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 15px;">
+                <span><?php printf(esc_html__('Manual resends: %d/%d', 'gravityforms-momentous'), $manual_retry_count, $max_manual_retries); ?></span>
+            </div>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button type="button" id="momentous-resend-btn" class="button button-primary" <?php echo $resend_disabled ? 'disabled' : ''; ?>>
+                    <?php echo esc_html($resend_text); ?>
+                </button>
+                <button type="button" id="momentous-notify-btn" class="button button-secondary" <?php echo $notify_disabled ? 'disabled' : ''; ?>>
+                    <?php echo esc_html($notify_text); ?>
+                </button>
+            </div>
+
+            <?php if ($manual_retry_count >= $max_manual_retries && empty($manual_notified_at)): ?>
+                <div style="background: #d1ecf1; border-left: 4px solid #0dcaf0; padding: 12px; margin-top: 15px;">
+                    <?php esc_html_e('Manual resend limit reached. Please use "Notify Leads" to request manual data entry.', 'gravityforms-momentous'); ?>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <script type="text/javascript">
+            var momentousEntryData = <?php echo wp_json_encode($script_data); ?>;
+        </script>
+        <?php
+    }
+
+    /**
+     * AJAX handler for manual resend
+     */
+    public function ajax_manual_resend()
+    {
+        $entry_id = isset($_POST['entry_id']) ? absint($_POST['entry_id']) : 0;
+        $nonce = isset($_POST['nonce']) ? sanitize_text_field($_POST['nonce']) : '';
+
+        if (!wp_verify_nonce($nonce, 'momentous_manual_resend_' . $entry_id)) {
+            wp_send_json_error(array('message' => 'Security check failed.'));
+        }
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => 'You do not have permission to perform this action.'));
+        }
+
+        $entry = GFAPI::get_entry($entry_id);
+        if (is_wp_error($entry)) {
+            wp_send_json_error(array('message' => 'Entry not found.'));
+        }
+
+        $abandoned_request = $this->get_abandoned_request_for_entry($entry_id);
+        if (!$abandoned_request) {
+            wp_send_json_error(array('message' => 'No abandoned request found for this entry.'));
+        }
+
+        $manual_retry_count = isset($abandoned_request['manual_retry_count']) ? intval($abandoned_request['manual_retry_count']) : 0;
+        if ($manual_retry_count >= 5) {
+            wp_send_json_error(array('message' => 'Manual resend limit reached. Please use "Notify Leads" instead.'));
+        }
+
+        // Reset the request for retry using raw SQL (wpdb->update can't set NULL on TIMESTAMP columns)
+        global $wpdb;
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
+
+        $updated = $wpdb->query($wpdb->prepare(
+            "UPDATE {$table_name}
+             SET status = %s,
+                 retry_count = %d,
+                 manual_retry_count = %d,
+                 executed_at = NULL,
+                 completed_at = NULL,
+                 last_attempt_at = NULL
+             WHERE id = %d",
+            'failed',
+            0,
+            $manual_retry_count + 1,
+            $abandoned_request['id']
+        ));
+
+        if ($updated === false) {
+            wp_send_json_error(array('message' => 'Failed to update request.'));
+        }
+
+        $current_user = wp_get_current_user();
+        $user_name = $current_user->display_name ? $current_user->display_name : $current_user->user_login;
+        $timestamp = current_time('Y-m-d H:i:s');
+
+        $this->add_momentus_note(
+            $entry_id,
+            "Manual Resend Triggered\n\nTriggered by: {$user_name}\nTime: {$timestamp}\nManual resend attempt: " . ($manual_retry_count + 1) . "/5\n\nThe request has been queued for retry.",
+            'INFO'
+        );
+
+        $this->log_debug(__METHOD__ . ' Manual resend triggered for entry ' . $entry_id . ' by ' . $user_name);
+
+        wp_send_json_success(array('message' => 'Resend queued successfully. The request will be processed shortly.'));
+    }
+
+    /**
+     * AJAX handler for notify leads
+     */
+    public function ajax_notify_leads()
+    {
+        $entry_id = isset($_POST['entry_id']) ? absint($_POST['entry_id']) : 0;
+        $nonce = isset($_POST['nonce']) ? sanitize_text_field($_POST['nonce']) : '';
+
+        if (!wp_verify_nonce($nonce, 'momentous_notify_leads_' . $entry_id)) {
+            wp_send_json_error(array('message' => 'Security check failed.'));
+        }
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => 'You do not have permission to perform this action.'));
+        }
+
+        $entry = GFAPI::get_entry($entry_id);
+        if (is_wp_error($entry)) {
+            wp_send_json_error(array('message' => 'Entry not found.'));
+        }
+
+        $abandoned_request = $this->get_abandoned_request_for_entry($entry_id);
+        if (!$abandoned_request) {
+            wp_send_json_error(array('message' => 'No abandoned request found for this entry.'));
+        }
+
+        if (!empty($abandoned_request['manual_notified_at'])) {
+            wp_send_json_error(array('message' => 'Leads have already been notified for this entry.'));
+        }
+
+        // Get form info
+        $form_id = $abandoned_request['form_id'];
+        $form = GFAPI::get_form($form_id);
+        $form_name = $form ? $form['title'] : 'Unknown Form';
+
+        // Determine email recipients
+        $settings = $this->get_plugin_settings();
+        $lead_emails = !empty($settings[self::MOMENTOUS_LEAD_EMAILS_NAME]) ? $settings[self::MOMENTOUS_LEAD_EMAILS_NAME] : '';
+        if (empty($lead_emails)) {
+            $lead_emails = !empty($settings['email_cron_failure_alerts']) ? $settings['email_cron_failure_alerts'] : get_option('admin_email');
+        }
+
+        $entry_url = admin_url("admin.php?page=gf_entries&view=entry&id={$form_id}&lid={$entry_id}");
+        $submission_date = isset($entry['date_created']) ? $entry['date_created'] : 'Unknown';
+        $enquiry_fields = $this->get_key_enquiry_fields($entry, $form);
+
+        // Error summary
+        $error_summary = 'Unknown error';
+        $error_details = '';
+        if ($abandoned_request['accounts_call_status'] != 200) {
+            $error_summary = "Accounts API returned HTTP {$abandoned_request['accounts_call_status']}";
+            $error_details = $abandoned_request['accounts_response'];
+        } elseif ($abandoned_request['opportunities_call_status'] != 200) {
+            $error_summary = "Opportunities API returned HTTP {$abandoned_request['opportunities_call_status']}";
+            $error_details = $abandoned_request['opportunities_response'];
+        }
+
+        $subject = sprintf('Manual Entry Required - %s (Entry #%d)', $form_name, $entry_id);
+
+        $message = "<h2>Manual Entry Required</h2>";
+        $message .= "<p>A Gravity Forms submission failed to sync to Momentus after multiple attempts. Manual data entry is required.</p>";
+
+        $message .= "<h3>Submission Details</h3>";
+        $message .= "<ul>";
+        $message .= "<li><strong>Form:</strong> " . esc_html($form_name) . "</li>";
+        $message .= "<li><strong>Entry ID:</strong> {$entry_id}</li>";
+        $message .= "<li><strong>Submission Date:</strong> " . esc_html($submission_date) . "</li>";
+        $message .= "</ul>";
+
+        $message .= "<h3>Enquiry Information</h3>";
+        $message .= "<ul>";
+        foreach ($enquiry_fields as $label => $value) {
+            $message .= "<li><strong>" . esc_html($label) . ":</strong> " . esc_html($value) . "</li>";
+        }
+        $message .= "</ul>";
+
+        $message .= "<h3>Error Summary</h3>";
+        $message .= "<p><strong>" . esc_html($error_summary) . "</strong></p>";
+        if (!empty($error_details)) {
+            $message .= "<pre style='background: #f5f5f5; padding: 10px; border: 1px solid #ddd;'>" . esc_html($error_details) . "</pre>";
+        }
+
+        $message .= "<h3>Actions Required</h3>";
+        $message .= "<ol>";
+        $message .= "<li><a href='{$entry_url}'>View the full entry in Gravity Forms</a></li>";
+        $message .= "<li>Manually enter the data into Momentus</li>";
+        $message .= "</ol>";
+
+        $message .= "<hr><p><em>Sent at: " . current_time('Y-m-d H:i:s') . "</em></p>";
+
+        $email_sent = wp_mail($lead_emails, $subject, $message, array('Content-Type: text/html'));
+
+        if (!$email_sent) {
+            wp_send_json_error(array('message' => 'Failed to send notification email. Check your mail configuration.'));
+        }
+
+        // Update manual_notified_at
+        global $wpdb;
+        $table_name = $wpdb->prefix . self::REQUEST_TABLE;
+        $wpdb->update(
+            $table_name,
+            array('manual_notified_at' => current_time('Y-m-d H:i:s')),
+            array('id' => $abandoned_request['id']),
+            array('%s'),
+            array('%d')
+        );
+
+        $current_user = wp_get_current_user();
+        $user_name = $current_user->display_name ? $current_user->display_name : $current_user->user_login;
+        $timestamp = current_time('Y-m-d H:i:s');
+
+        $this->add_momentus_note(
+            $entry_id,
+            "Manual Entry Notification Sent\n\nNotification sent to: {$lead_emails}\nTriggered by: {$user_name}\nTime: {$timestamp}\n\nLeads have been notified to manually enter this data into Momentus.",
+            'INFO'
+        );
+
+        $this->log_debug(__METHOD__ . ' Lead notification sent for entry ' . $entry_id . ' to ' . $lead_emails . ' by ' . $user_name);
+
+        wp_send_json_success(array('message' => 'Notification sent successfully.'));
+    }
+
+    /**
+     * Extract key enquiry fields from entry for notification email
+     */
+    private function get_key_enquiry_fields($entry, $form)
+    {
+        $fields = array();
+        if (!$form || empty($form['fields'])) {
+            return $fields;
+        }
+
+        $key_labels = array('name', 'email', 'phone', 'venue', 'date', 'time', 'message', 'notes', 'company', 'organization');
+
+        foreach ($form['fields'] as $field) {
+            $label = strtolower($field->label);
+            $field_type = $field->type;
+
+            $is_key_field = false;
+            foreach ($key_labels as $key_label) {
+                if (strpos($label, $key_label) !== false) {
+                    $is_key_field = true;
+                    break;
+                }
+            }
+
+            if ($is_key_field || in_array($field_type, array('name', 'email', 'phone'))) {
+                $value = '';
+                if ($field_type === 'name') {
+                    $parts = array();
+                    foreach (array('3', '6') as $suffix) {
+                        $sub_value = rgar($entry, $field->id . '.' . $suffix);
+                        if (!empty($sub_value)) {
+                            $parts[] = $sub_value;
+                        }
+                    }
+                    $value = implode(' ', $parts);
+                } else {
+                    $value = rgar($entry, $field->id);
+                }
+
+                if (!empty($value)) {
+                    $fields[$field->label] = $value;
+                }
+            }
+        }
+
+        return array_slice($fields, 0, 10, true);
     }
 
     public static function get_instance()

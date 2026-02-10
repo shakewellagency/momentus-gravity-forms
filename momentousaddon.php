@@ -8,7 +8,7 @@ Author: Shakewell
 Author URI: https://www.shakewell.agency/
 */
 
-define('GF_MOMENTOUS_FEED_ADDON_VERSION', '1.9');
+define('GF_MOMENTOUS_FEED_ADDON_VERSION', '2.0');
 
 add_action('gform_loaded', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'load' ), 5);
 add_action('gform_after_submission', array( 'GF_Momentous_Feed_AddOn_Bootstrap', 'processSubmission' ), 5, 2);
@@ -22,11 +22,11 @@ add_action('init', function () {
         wp_schedule_event(time(), 'every_one_minute', 'momentous_async_send_cron');
     }
 
-    // Migration: Clear old 2-minute schedule and re-register with 5-minute interval
-    $failed_cron_migrated = get_option('momentous_failed_cron_migrated_5min', false);
+    // Migration: Clear old schedule and re-register with 5-minute interval
+    $failed_cron_migrated = get_option('momentous_failed_cron_migrated_5min_v2', false);
     if (!$failed_cron_migrated) {
         wp_clear_scheduled_hook('momentous_process_failed_requests_cron');
-        update_option('momentous_failed_cron_migrated_5min', true);
+        update_option('momentous_failed_cron_migrated_5min_v2', true);
     }
 
     if (!wp_next_scheduled('momentous_process_failed_requests_cron')) {
@@ -127,6 +127,18 @@ class GF_Momentous_Feed_AddOn_Bootstrap
             // After adding retry_count column, clean up old failed records
             self::cleanup_old_failed_records();
         }
+
+        // Check if manual_retry_count column exists (for manual resend tracking)
+        $column = $wpdb->get_results("SHOW COLUMNS FROM `{$table_name}` LIKE 'manual_retry_count'");
+        if (empty($column)) {
+            $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `manual_retry_count` INT DEFAULT 0 NOT NULL AFTER `retry_count`");
+        }
+
+        // Check if manual_notified_at column exists (for lead notification tracking)
+        $column = $wpdb->get_results("SHOW COLUMNS FROM `{$table_name}` LIKE 'manual_notified_at'");
+        if (empty($column)) {
+            $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `manual_notified_at` TIMESTAMP NULL AFTER `manual_retry_count`");
+        }
     }
 
     /**
@@ -165,7 +177,7 @@ class GF_Momentous_Feed_AddOn_Bootstrap
             wp_schedule_event(time(), 'every_one_minute', 'momentous_async_send_cron');
         }
         if (!wp_next_scheduled('momentous_process_failed_requests_cron')) {
-            wp_schedule_event(time(), 'every_two_minutes', 'momentous_process_failed_requests_cron');
+            wp_schedule_event(time(), 'every_five_minutes', 'momentous_process_failed_requests_cron');
         }
         if (!wp_next_scheduled('momentous_cron_watchdog')) {
             wp_schedule_event(time(), 'every_ten_minutes', 'momentous_cron_watchdog');
@@ -203,7 +215,7 @@ class GF_Momentous_Feed_AddOn_Bootstrap
         $object->process_failed_async_requests();
     }
 
-    public static function cron_schedule_filter() {
+    public static function cron_schedule_filter($schedules) {
         $schedules['every_five_minutes'] = [
             'interval' => 300, // 300 seconds = 5 minutes
             'display'  => __('Every 5 Minutes'),
@@ -256,7 +268,7 @@ function momentous_check_cron_health()
     if (!empty($problems)) {
         $message = "<p><strong>Momentous CRON Failure Watchdog Alert</strong></p>";
         $message .= '<ul><li>' . implode('</li><li>', $problems) . '</li></ul>';
-        $message .= "<p>Time checked: " . current_time('mysql') . "</p>";
+        $message .= "<p>Time checked: " . current_time('Y-m-d H:i:s') . "</p>";
 
         $settings = gf_momentous_feed_addon()->get_plugin_settings();
         $to = !empty($settings['email_cron_failure_alerts']) ? $settings['email_cron_failure_alerts'] : get_option('admin_email');
